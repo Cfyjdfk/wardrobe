@@ -1,10 +1,9 @@
 <div align="center">
 
-# Open Wardrobe
+# Wardrobe
 
-Your clothes, extracted and organized with OpenAI.
+Your clothes, extracted and organized with gpt-image.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/tandpfun/open-wardrobe/ci.yml?branch=main&style=flat-square)](../../actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-191919?style=flat-square)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-191919?style=flat-square)](package.json)
 
@@ -19,8 +18,8 @@ Your clothes, extracted and organized with OpenAI.
 ## Quick start
 
 ```bash
-git clone https://github.com/tandpfun/open-wardrobe.git
-cd open-wardrobe
+git clone https://github.com/tandpfun/wardrobe.git
+cd wardrobe
 npm install
 cp .env.example .env
 npm run dev
