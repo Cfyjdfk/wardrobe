@@ -729,9 +729,19 @@ export function wardrobeImportApi(options = {}) {
         void generateOutfitForId(id);
         return json(res, 202, outfit);
       }
-      const outfitDeleteMatch = url.pathname.match(/^\/api\/import\/outfits\/(outfit-[a-f0-9-]{36})$/i);
-      if (outfitDeleteMatch && req.method === "DELETE") {
-        const id = outfitDeleteMatch[1];
+      const outfitMatch = url.pathname.match(/^\/api\/import\/outfits\/(outfit-[a-f0-9-]{36})$/i);
+      if (outfitMatch && req.method === "PATCH") {
+        const id = outfitMatch[1];
+        const input = await body(req);
+        if (typeof input.name !== "string") return json(res, 400, { error: "name is required." });
+        const name = input.name.trim().slice(0, 120);
+        if (!name) return json(res, 400, { error: "Outfit name cannot be empty." });
+        const updated = await updateOutfitRecord(id, (current) => ({ ...current, name }));
+        if (!updated) return json(res, 404, { error: "Outfit not found" });
+        return json(res, 200, updated);
+      }
+      if (outfitMatch && req.method === "DELETE") {
+        const id = outfitMatch[1];
         const document = await loadOutfitsDocument();
         const next = document.outfits.filter((item) => item.id !== id);
         if (next.length === document.outfits.length) return json(res, 404, { error: "Outfit not found" });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, ArrowLeft, Check, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, Check, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 
@@ -25,6 +25,59 @@ function sortByPart(items) {
     if (typeDifference) return typeDifference;
     return a.id.localeCompare(b.id);
   });
+}
+
+function adjacentId(ids, currentId, delta) {
+  if (!ids.length) return null;
+  const index = ids.indexOf(currentId);
+  if (index === -1) return ids[0];
+  const next = index + delta;
+  if (next < 0 || next >= ids.length) return null;
+  return ids[next];
+}
+
+function navigationBounds(ids, currentId) {
+  const index = ids.indexOf(currentId);
+  if (index === -1) return { canPrev: false, canNext: ids.length > 0 };
+  return { canPrev: index > 0, canNext: index < ids.length - 1 };
+}
+
+function arrowNavigationDelta(key) {
+  if (key === "ArrowLeft" || key === "ArrowUp") return -1;
+  if (key === "ArrowRight" || key === "ArrowDown") return 1;
+  return 0;
+}
+
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+function ViewerNavArrows({ onNavigate, label = "item", canPrev = false, canNext = false }) {
+  if (!onNavigate) return null;
+  return (
+    <div className="viewer-nav-arrows">
+      <button
+        className="viewer-nav-arrow viewer-nav-arrow--prev"
+        type="button"
+        onClick={() => onNavigate(-1)}
+        disabled={!canPrev}
+        aria-label={`Previous ${label}`}
+      >
+        <CaretLeft size={22} weight="bold" aria-hidden="true" />
+      </button>
+      <button
+        className="viewer-nav-arrow viewer-nav-arrow--next"
+        type="button"
+        onClick={() => onNavigate(1)}
+        disabled={!canNext}
+        aria-label={`Next ${label}`}
+      >
+        <CaretRight size={22} weight="bold" aria-hidden="true" />
+      </button>
+    </div>
+  );
 }
 
 function readEdits() {
@@ -354,43 +407,122 @@ function OutfitsSection({ outfits, selectedId, onOpen }) {
   );
 }
 
-function OutfitViewer({ outfit, garments, onClose, onDelete, onOpenGarment }) {
+function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext }) {
   const closeButtonRef = useRef(null);
+  const shakeTimerRef = useRef(null);
+  const [name, setName] = useState(outfit.name || "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [shaking, setShaking] = useState(false);
+  const [closeBlocked, setCloseBlocked] = useState(false);
   const hasImage = outfit.status === "ready" && Boolean(outfit.image);
   const orderedGarments = sortByPart(garments);
+  const isDirty = name.trim() !== (outfit.name || "").trim();
 
   useEffect(() => {
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
+    setName(outfit.name || "");
+    setSaveError("");
+    setCloseBlocked(false);
+  }, [outfit.id]);
+
+  const nudgeUnsaved = useCallback(() => {
+    setCloseBlocked(true);
+    setShaking(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setShaking(true));
+    });
+    clearTimeout(shakeTimerRef.current);
+    shakeTimerRef.current = setTimeout(() => setShaking(false), 420);
+  }, []);
+
+  const requestClose = useCallback(() => {
+    if (isDirty) nudgeUnsaved();
+    else onClose();
+  }, [isDirty, nudgeUnsaved, onClose]);
+
+  const requestNavigate = useCallback((delta) => {
+    if (!onNavigate) return;
+    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
+    if (isDirty) nudgeUnsaved();
+    else onNavigate(delta);
+  }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
+
+  useEffect(() => {
     document.body.classList.add("viewer-open");
     closeButtonRef.current?.focus({ preventScroll: true });
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
       document.body.classList.remove("viewer-open");
+      clearTimeout(shakeTimerRef.current);
     };
-  }, [onClose]);
+  }, [outfit.id]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        if (isTypingTarget(event.target) && isDirty) return;
+        if (isTypingTarget(event.target)) {
+          event.target.blur();
+          return;
+        }
+        requestClose();
+        return;
+      }
+      if (isTypingTarget(event.target)) return;
+      const delta = arrowNavigationDelta(event.key);
+      if (!delta) return;
+      event.preventDefault();
+      requestNavigate(delta);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isDirty, requestClose, requestNavigate]);
+
+  const cancelEditing = () => {
+    setName(outfit.name || "");
+    setSaveError("");
+    setCloseBlocked(false);
+    onClose();
+  };
+
+  const saveEditing = async () => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setSaveError("Outfit name cannot be empty.");
+      return;
+    }
+    if (!isDirty) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onSave(outfit.id, nextName);
+      setCloseBlocked(false);
+    } catch (error) {
+      setSaveError(error.message || "Could not save the outfit name.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <div className="viewer-entry">
         <aside
-          className={`viewer editing${hasImage ? " has-modeled-image has-outfit-image" : ""}`}
+          className={`viewer editing${hasImage ? " has-modeled-image has-outfit-image" : ""}${shaking ? " shake" : ""}`}
           role="dialog"
           aria-modal="true"
           aria-label="Selected outfit"
         >
-          <button className="viewer-icon-close" type="button" onClick={onClose} aria-label="Close viewer" ref={closeButtonRef}>
+          <button className="viewer-icon-close" type="button" onClick={requestClose} aria-label="Close viewer" ref={closeButtonRef}>
             <X size={24} weight="light" aria-hidden="true" />
           </button>
+          <ViewerNavArrows onNavigate={requestNavigate} label="outfit" canPrev={canPrev} canNext={canNext} />
 
           {hasImage ? (
             <div className="modeled-hero outfit-hero">
               <OptimizedImage
                 className="modeled-hero-photo"
                 src={outfit.image}
-                alt={outfit.name || "Outfit"}
+                alt={name.trim() || outfit.name || "Outfit"}
                 sizes="(max-width: 860px) 100vw, 520px"
                 breakpoints={[320, 480, 640, 800, 1040, 1280]}
                 quality={82}
@@ -400,7 +532,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onOpenGarment }) {
           ) : (
             <div className="viewer-heading">
               <div>
-                <h2>{outfit.name || "Outfit"}</h2>
+                <h2>{name.trim() || "Outfit"}</h2>
               </div>
             </div>
           )}
@@ -409,10 +541,20 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onOpenGarment }) {
             {hasImage && (
               <div className="viewer-heading modeled-heading">
                 <div>
-                  <h2>{outfit.name || "Outfit"}</h2>
+                  <h2>{name.trim() || "Outfit"}</h2>
                 </div>
               </div>
             )}
+
+            <label className="field outfit-name-field">
+              <span>Name</span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Outfit"
+                maxLength={120}
+              />
+            </label>
 
             {outfit.status === "failed" && (
               <p className="outfit-viewer-error" role="alert">{outfit.error || "Generation failed"}</p>
@@ -437,7 +579,10 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onOpenGarment }) {
                         type="button"
                         className="outfit-viewer-garment"
                         role="listitem"
-                        onClick={() => onOpenGarment(item.id)}
+                        onClick={() => {
+                          if (isDirty) nudgeUnsaved();
+                          else onOpenGarment(item.id);
+                        }}
                         aria-label={`View ${item.name || type}`}
                       >
                         <div className="viewer-art">
@@ -461,12 +606,18 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onOpenGarment }) {
               )}
             </div>
 
+            {closeBlocked && isDirty && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
+            {saveError && <p className="outfit-viewer-error" role="alert">{saveError}</p>}
+
             <div className="viewer-actions">
               <button className="delete-button" type="button" onClick={() => onDelete(outfit.id)}>
                 <Trash size={15} weight="regular" aria-hidden="true" /> Delete
               </button>
               <span className="action-spacer" />
-              <button className="secondary-button" type="button" onClick={onClose}>Close</button>
+              <button className="secondary-button" type="button" onClick={cancelEditing}>Cancel</button>
+              <button className="primary-button" type="button" onClick={saveEditing} disabled={!isDirty || saving}>
+                <Check size={15} weight="bold" aria-hidden="true" /> {saving ? "Saving" : "Save"}
+              </button>
             </div>
           </div>
         </aside>
@@ -635,7 +786,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit }) {
+function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -695,28 +846,40 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     else onBackToOutfit();
   }, [isDirty, nudgeUnsaved, onBackToOutfit]);
 
+  const requestNavigate = useCallback((delta) => {
+    if (!onNavigate) return;
+    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
+    if (isDirty) nudgeUnsaved();
+    else onNavigate(delta);
+  }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
+
+  useEffect(() => {
+    document.body.classList.add("viewer-open");
+    closeButtonRef.current?.focus({ preventScroll: true });
+    return () => {
+      document.body.classList.remove("viewer-open");
+      clearTimeout(shakeTimerRef.current);
+    };
+  }, [item.id]);
+
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") {
         if (sampling) setSampling(null);
         else if (onBackToOutfit) requestBack();
         else requestClose();
+        return;
       }
+      const delta = arrowNavigationDelta(event.key);
+      if (!delta) return;
+      event.preventDefault();
+      requestNavigate(delta);
     };
 
     document.addEventListener("keydown", onKeyDown);
-    document.body.classList.add("viewer-open");
-    closeButtonRef.current?.focus({ preventScroll: true });
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.classList.remove("viewer-open");
-      clearTimeout(shakeTimerRef.current);
-    };
-  }, [onBackToOutfit, requestBack, requestClose, sampling]);
-
-  useEffect(() => {
-    if (!isDirty) setCloseBlocked(false);
-  }, [isDirty]);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onBackToOutfit, requestBack, requestClose, requestNavigate, sampling]);
 
   useEffect(() => {
     setSampling(null);
@@ -724,6 +887,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     setPalette(item.palette || []);
     setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
     setRefreshingModeled(false);
+    setCloseBlocked(false);
     // Intentionally keyed on the item's identity, not the whole object—unrelated
     // patches to the same item (e.g. modeled-photo status updates) shouldn't
     // wipe in-progress edits or the extracted color suggestions.
@@ -822,6 +986,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       <button className="viewer-icon-close" type="button" onClick={requestClose} aria-label="Close viewer" ref={closeButtonRef}>
         <X size={24} weight="light" aria-hidden="true" />
       </button>
+      <ViewerNavArrows onNavigate={requestNavigate} label="garment" canPrev={canPrev} canNext={canNext} />
 
       {hasModeledImage ? (
         <div className="modeled-hero">
@@ -883,7 +1048,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
           sampleStatus={sampleStatus}
         />
 
-        {closeBlocked && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
+        {closeBlocked && isDirty && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
 
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
@@ -1007,6 +1172,43 @@ export function App() {
     });
   }, [activeType, items]);
 
+  const browseableOutfitIds = useMemo(
+    () => outfits.filter((outfit) => outfit.status === "ready" || outfit.status === "failed").map((outfit) => outfit.id),
+    [outfits],
+  );
+
+  const navigableItemIds = useMemo(() => {
+    const sourceOutfit = returnOutfitId ? outfits.find((outfit) => outfit.id === returnOutfitId) : null;
+    if (sourceOutfit) {
+      return sortByPart(
+        (sourceOutfit.garmentIds || [])
+          .map((id) => items.find((item) => item.id === id))
+          .filter(Boolean),
+      ).map((item) => item.id);
+    }
+    return visibleItems.map((item) => item.id);
+  }, [items, outfits, returnOutfitId, visibleItems]);
+
+  const itemNavBounds = useMemo(
+    () => navigationBounds(navigableItemIds, selectedId),
+    [navigableItemIds, selectedId],
+  );
+
+  const outfitNavBounds = useMemo(
+    () => navigationBounds(browseableOutfitIds, selectedOutfitId),
+    [browseableOutfitIds, selectedOutfitId],
+  );
+
+  const navigateItem = useCallback((delta) => {
+    const nextId = adjacentId(navigableItemIds, selectedId, delta);
+    if (nextId && nextId !== selectedId) setSelectedId(nextId);
+  }, [navigableItemIds, selectedId]);
+
+  const navigateOutfit = useCallback((delta) => {
+    const nextId = adjacentId(browseableOutfitIds, selectedOutfitId, delta);
+    if (nextId && nextId !== selectedOutfitId) setSelectedOutfitId(nextId);
+  }, [browseableOutfitIds, selectedOutfitId]);
+
   const chooseType = (typeId) => {
     setActiveType(typeId);
     setSelectedId(null);
@@ -1024,6 +1226,17 @@ export function App() {
     }
     setOutfits((current) => current.filter((outfit) => outfit.id !== id));
     setSelectedOutfitId(null);
+  }, []);
+
+  const saveOutfitName = useCallback(async (id, name) => {
+    const response = await fetch(`/api/import/outfits/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Could not save the outfit name.");
+    setOutfits((current) => current.map((outfit) => (outfit.id === id ? { ...outfit, ...result } : outfit)));
   }, []);
 
   const saveItem = (updatedItem) => {
@@ -1171,6 +1384,9 @@ export function App() {
           onDelete={deleteItem}
           onGenerateModeled={patchItem}
           onBackToOutfit={returnOutfitId ? backToOutfit : null}
+          onNavigate={navigateItem}
+          canPrev={itemNavBounds.canPrev}
+          canNext={itemNavBounds.canNext}
         />
       )}
       {selectedOutfit && (
@@ -1179,7 +1395,11 @@ export function App() {
           garments={selectedOutfitGarments}
           onClose={() => setSelectedOutfitId(null)}
           onDelete={deleteOutfit}
+          onSave={saveOutfitName}
           onOpenGarment={openGarmentFromOutfit}
+          onNavigate={navigateOutfit}
+          canPrev={outfitNavBounds.canPrev}
+          canNext={outfitNavBounds.canNext}
         />
       )}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />

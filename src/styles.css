@@ -210,12 +210,14 @@ button { font: inherit; }
 .outfit-composer-hint { color: var(--muted); }
 .outfit-composer-error { color: var(--accent); }
 
-.outfit-generate-button:disabled {
+.outfit-generate-button:disabled,
+.primary-button:disabled {
   opacity: .45;
   cursor: default;
 }
 
-.outfit-generate-button:disabled:hover {
+.outfit-generate-button:disabled:hover,
+.primary-button:disabled:hover {
   background: var(--ink);
   border-color: var(--ink);
 }
@@ -253,12 +255,16 @@ button { font: inherit; }
 .outfits-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  align-items: start;
   gap: 28px 24px;
 }
 
 .outfit-card {
   min-width: 0;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   width: 100%;
   border: 1px solid transparent;
   padding: 0;
@@ -696,6 +702,51 @@ button { font: inherit; }
   outline-offset: 2px;
 }
 
+.viewer-nav-arrows {
+  pointer-events: none;
+}
+
+.viewer-nav-arrow {
+  pointer-events: auto;
+  position: absolute;
+  top: 42%;
+  z-index: 8;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(25, 25, 25, .14);
+  border-radius: 0;
+  padding: 0;
+  background: rgba(244, 240, 232, .92);
+  color: var(--ink);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.viewer-nav-arrow--prev { left: 12px; }
+.viewer-nav-arrow--next { right: 12px; }
+
+.viewer-nav-arrow:hover:not(:disabled),
+.viewer-nav-arrow:focus-visible:not(:disabled) {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  outline: none;
+}
+
+.viewer-nav-arrow:disabled {
+  opacity: .28;
+  cursor: default;
+}
+
+.has-modeled-image .viewer-nav-arrow {
+  top: min(28%, 180px);
+  background: rgba(246, 241, 232, .9);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
 .viewer-heading {
   flex: 0 0 auto;
   padding: 0 62px 0 0;
@@ -971,6 +1022,11 @@ button { font: inherit; }
   margin: 0;
   border: 0;
   padding: 0;
+}
+
+.field.outfit-name-field {
+  display: block;
+  margin: 0 0 28px;
 }
 
 .field > span,
