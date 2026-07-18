@@ -2,10 +2,28 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import {
+  DEFAULT_OUTFIT_SETTING,
+  PART_LABEL,
+  buildGarmentPrompt,
+  buildModeledPrompt,
+  buildOutfitPrompt,
+  outfitNameFromGarments,
+  sortGarmentsByPart,
+} from "./prompts.mjs";
+
+export {
+  buildGarmentPrompt,
+  buildModeledPrompt,
+  buildOutfitPrompt,
+  outfitNameFromGarments,
+  sortGarmentsByPart,
+} from "./prompts.mjs";
 
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
 const LIBRARY_ASSET_ROOT = "/api/import/library";
+const OUTFIT_ASSET_ROOT = "/api/import/outfit-images";
 const STAGES = new Set(["crop", "garment", "modeled"]);
 const DECISIONS = new Set(["approve", "reject"]);
 const PARTS = new Set(["upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes"]);
@@ -104,39 +122,6 @@ function chooseChromaKey(primary = "#808080") {
     return distance(b) - distance(a);
   })[0];
   return `#${selected.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
-}
-
-export function buildGarmentPrompt(metadata = {}, chromaKey = "#00ff00") {
-  const name = metadata.name || "clothing item";
-  const category = metadata.part || "wardrobe item";
-  const primary = metadata.color || "the exact visible color";
-  const secondary = metadata.secondaryColor ? ` with distinct secondary color ${metadata.secondaryColor}` : "";
-  const details = Array.isArray(metadata.tags) && metadata.tags.length
-    ? metadata.tags.join(", ")
-    : "all visible construction and design details";
-
-  return `Use case: background-extraction
-Asset type: ecommerce catalog product cutout source
-
-Input image: The reference photograph shows the exact garment, either by itself or worn by a person. Use it only to identify and reconstruct the garment.
-
-Primary request: Reconstruct ONLY the complete empty ${name} (${category}) as a clean, front-facing ecommerce catalog product photograph. If a wearer is present, remove them. Remove every other garment, object, and background element. Show the complete item naturally arranged and symmetrical, with no person, body, mannequin, or hanger visible.
-
-Garment fidelity: Preserve the reference garment's exact primary color ${primary}${secondary}, material and texture, silhouette, neckline, sleeves, fastenings, pattern, and distinctive details (${details}). Preserve any clearly legible existing graphic or logo exactly, but do not invent or reinterpret uncertain logos, text, pockets, seams, hardware, colors, or decoration.
-
-Composition: Centered straight-on product view. Keep the entire garment inside the frame with generous, even padding on every side. No cropping or truncation.
-
-Background: Perfectly flat, absolutely uniform solid ${chromaKey} chroma-key color, edge-to-edge. No shadows, gradient, texture, vignette, floor, horizon, reflection, or lighting variation.
-
-Lighting: Neutral diffuse product lighting contained on the garment only.
-
-Avoid: person, body, skin, hair, mannequin, hanger, props, other garments, retail tags, cast shadow, contact shadow, reflection, watermark, caption, border, background variation, or chroma spill.
-
-Critical: Use no ${chromaKey} anywhere in the garment. Produce exactly one complete garment with a crisp, separable outer silhouette.`;
-}
-
-export function buildModeledPrompt() {
-  return "Create a professional horizontal 3:2 editorial fashion photograph of the person in Image 1 wearing the exact garment from Image 2. Preserve the person's recognizable identity, face, hair, age and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric, a tasteful real-world setting, and leave environmental space around the model. No text, watermark, product mockup, or synthetic appearance.";
 }
 
 function cleanupTolerance(value) {
@@ -349,6 +334,8 @@ export function wardrobeImportApi(options = {}) {
   let jobsDir;
   let importedFile;
   let libraryAssetDir;
+  let outfitsFile;
+  let outfitAssetDir;
   const running = new Map();
   const setting = (name, fallback = "") => options.env?.[name] || process.env[name] || fallback;
   const apiBaseUrl = () => setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1").replace(/\/$/, "");
@@ -385,6 +372,33 @@ export function wardrobeImportApi(options = {}) {
   async function loadImported() {
     try { return JSON.parse(await readFile(importedFile, "utf8")); }
     catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  }
+
+  async function loadOutfitsDocument() {
+    try {
+      const document = JSON.parse(await readFile(outfitsFile, "utf8"));
+      if (Array.isArray(document)) return { version: 1, outfits: document };
+      const outfits = Array.isArray(document?.outfits) ? document.outfits : [];
+      return { version: Number(document?.version) || 1, outfits };
+    } catch (error) {
+      if (error.code === "ENOENT") return { version: 1, outfits: [] };
+      throw error;
+    }
+  }
+
+  async function saveOutfitsDocument(document) {
+    await atomicJson(outfitsFile, { version: document.version || 1, outfits: document.outfits || [] });
+  }
+
+  async function updateOutfitRecord(id, updater) {
+    const document = await loadOutfitsDocument();
+    const index = document.outfits.findIndex((item) => item.id === id);
+    if (index === -1) return null;
+    const updated = updater(document.outfits[index]);
+    const next = [...document.outfits];
+    next[index] = updated;
+    await saveOutfitsDocument({ ...document, outfits: next });
+    return updated;
   }
 
   async function persistImported(job, includeModeled = false) {
@@ -486,6 +500,98 @@ export function wardrobeImportApi(options = {}) {
     return task;
   }
 
+  async function resolveGarmentAsset(record) {
+    const candidates = [
+      path.join(libraryAssetDir, `${record.id}-garment.png`),
+    ];
+    if (typeof record.image === "string") {
+      const filename = path.basename(record.image.split("?")[0]);
+      if (filename) candidates.push(path.join(libraryAssetDir, filename));
+    }
+    for (const candidate of candidates) {
+      try {
+        return await readFile(candidate);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    throw Object.assign(new Error(`Garment image missing for ${record.name || record.id}.`), { status: 409 });
+  }
+
+  async function generateOutfitImageBytes(outfit, garments) {
+    const key = setting("OPENAI_API_KEY");
+    if (!key) throw new Error("OPENAI_API_KEY is not configured");
+    const modelPath = path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"));
+    let modelData;
+    try {
+      modelData = await readFile(modelPath);
+    } catch (error) {
+      if (error.code === "ENOENT") throw new Error(`Model reference not found at ${modelPath}. Set WARDROBE_MODEL_REFERENCE or add data/model-reference.png.`);
+      throw error;
+    }
+    const ordered = sortGarmentsByPart(garments);
+    const images = [
+      { data: modelData, mime: "image/png", name: "model.png" },
+      ...await Promise.all(ordered.map(async (garment, index) => ({
+        data: await resolveGarmentAsset(garment),
+        mime: "image/png",
+        name: `garment-${index + 1}.png`,
+      }))),
+    ];
+    const prompt = options.outfitPrompt || buildOutfitPrompt(ordered, {
+      name: outfit.name,
+      setting: outfit.setting || DEFAULT_OUTFIT_SETTING,
+      prompt: outfit.prompt || "",
+    });
+    return openAIEdit({
+      key,
+      baseUrl: apiBaseUrl(),
+      model: setting("OPENAI_OUTFIT_MODEL", setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2"))),
+      quality: setting("OPENAI_IMAGE_QUALITY", "high"),
+      size: "1024x1024",
+      images,
+      prompt,
+    });
+  }
+
+  function generateOutfitForId(id) {
+    const lock = `outfit:${id}`;
+    if (running.has(lock)) return running.get(lock);
+    const task = (async () => {
+      try {
+        const document = await loadOutfitsDocument();
+        const outfit = document.outfits.find((item) => item.id === id);
+        if (!outfit) return;
+        const records = await loadImported();
+        const garments = (outfit.garmentIds || [])
+          .map((garmentId) => records.find((item) => item.id === garmentId))
+          .filter(Boolean);
+        if (garments.length < 2) throw new Error("This outfit is missing garments from the wardrobe.");
+        const bytes = await generateOutfitImageBytes(outfit, garments);
+        await mkdir(outfitAssetDir, { recursive: true });
+        const assetName = `${id}.png`;
+        await writeFile(path.join(outfitAssetDir, assetName), bytes);
+        const image = `${OUTFIT_ASSET_ROOT}/${assetName}?v=${Date.now()}`;
+        await updateOutfitRecord(id, (current) => ({
+          ...current,
+          image,
+          status: "ready",
+          error: null,
+          completedAt: new Date().toISOString(),
+        }));
+      } catch (error) {
+        await updateOutfitRecord(id, (current) => ({
+          ...current,
+          status: "failed",
+          error: error.message,
+          completedAt: new Date().toISOString(),
+        })).catch(() => {});
+      }
+    })().finally(() => running.delete(lock));
+    running.set(lock, task);
+    return task;
+  }
+
   async function generate(job, stageName) {
     const lock = `${job.id}:${stageName}`;
     if (running.has(lock)) return running.get(lock);
@@ -561,6 +667,85 @@ export function wardrobeImportApi(options = {}) {
       }
       if (url.pathname === "/api/import/config" && req.method === "GET") {
         return json(res, 200, await setupStatus());
+      }
+      if (url.pathname === "/api/import/outfits" && req.method === "GET") {
+        const document = await loadOutfitsDocument();
+        const outfits = [...document.outfits].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        return json(res, 200, outfits);
+      }
+      if (url.pathname === "/api/import/outfits" && req.method === "POST") {
+        const setup = await setupStatus();
+        if (!setup.ready) {
+          const missing = [
+            !setup.hasApiKey && "OPENAI_API_KEY in .env",
+            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+          ].filter(Boolean).join(" and ");
+          return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
+        }
+        const input = await body(req);
+        const garmentIds = Array.isArray(input.garmentIds)
+          ? [...new Set(input.garmentIds.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))]
+          : [];
+        if (garmentIds.length < 2) {
+          return json(res, 400, { error: "Add at least two garments to generate an outfit." });
+        }
+        const records = await loadImported();
+        const garments = [];
+        const seenParts = new Set();
+        for (const garmentId of garmentIds) {
+          const record = records.find((item) => item.id === garmentId);
+          if (!record) return json(res, 404, { error: `Wardrobe item not found: ${garmentId}` });
+          if (seenParts.has(record.part)) {
+            return json(res, 400, { error: `Only one ${PART_LABEL[record.part] || "item"} can be added.` });
+          }
+          seenParts.add(record.part);
+          garments.push(record);
+        }
+        for (const garment of garments) {
+          try {
+            await resolveGarmentAsset(garment);
+          } catch (error) {
+            return json(res, error.status || 409, { error: error.message });
+          }
+        }
+        const ordered = sortGarmentsByPart(garments);
+        const id = `outfit-${randomUUID()}`;
+        const name = outfitNameFromGarments(ordered);
+        const createdAt = new Date().toISOString();
+        const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) : "";
+        const outfit = {
+          id,
+          name,
+          garmentIds: ordered.map((item) => item.id),
+          setting: DEFAULT_OUTFIT_SETTING,
+          prompt: prompt || null,
+          image: null,
+          status: "processing",
+          error: null,
+          createdAt,
+        };
+        const document = await loadOutfitsDocument();
+        await saveOutfitsDocument({ ...document, outfits: [...document.outfits, outfit] });
+        void generateOutfitForId(id);
+        return json(res, 202, outfit);
+      }
+      const outfitDeleteMatch = url.pathname.match(/^\/api\/import\/outfits\/(outfit-[a-f0-9-]{36})$/i);
+      if (outfitDeleteMatch && req.method === "DELETE") {
+        const id = outfitDeleteMatch[1];
+        const document = await loadOutfitsDocument();
+        const next = document.outfits.filter((item) => item.id !== id);
+        if (next.length === document.outfits.length) return json(res, 404, { error: "Outfit not found" });
+        await saveOutfitsDocument({ ...document, outfits: next });
+        await rm(path.join(outfitAssetDir, `${id}.png`), { force: true });
+        return json(res, 200, { deleted: true, id });
+      }
+      const outfitAssetMatch = url.pathname.match(/^\/api\/import\/outfit-images\/([\w.-]+)$/i);
+      if (outfitAssetMatch && req.method === "GET") {
+        const file = path.join(outfitAssetDir, path.basename(outfitAssetMatch[1]));
+        await stat(file);
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return res.end(await readFile(file));
       }
       const wardrobeItemMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
       if (wardrobeItemMatch && req.method === "GET") {
@@ -765,8 +950,11 @@ export function wardrobeImportApi(options = {}) {
       jobsDir = path.join(dataDir, "jobs");
       importedFile = path.join(dataDir, "library.json");
       libraryAssetDir = path.join(dataDir, "imported");
+      outfitsFile = path.join(dataDir, "outfits.json");
+      outfitAssetDir = path.join(dataDir, "outfit-images");
       await mkdir(jobsDir, { recursive: true });
       await mkdir(libraryAssetDir, { recursive: true });
+      await mkdir(outfitAssetDir, { recursive: true });
       const importedRecords = await loadImported();
       let importedInterrupted = false;
       const sweptRecords = importedRecords.map((record) => {
@@ -775,6 +963,19 @@ export function wardrobeImportApi(options = {}) {
         return { ...record, modeledGeneration: { status: "failed", error: "Generation was interrupted when the app restarted. Try again.", startedAt: record.modeledGeneration.startedAt } };
       });
       if (importedInterrupted) await atomicJson(importedFile, sweptRecords);
+      const outfitsDocument = await loadOutfitsDocument();
+      let outfitsInterrupted = false;
+      const sweptOutfits = outfitsDocument.outfits.map((outfit) => {
+        if (outfit.status !== "processing") return outfit;
+        outfitsInterrupted = true;
+        return {
+          ...outfit,
+          status: "failed",
+          error: "Generation was interrupted when the app restarted. Try again.",
+          completedAt: new Date().toISOString(),
+        };
+      });
+      if (outfitsInterrupted) await saveOutfitsDocument({ ...outfitsDocument, outfits: sweptOutfits });
       const ids = await readdir(jobsDir).catch(() => []);
       for (const id of ids) {
         const job = await loadJob(id);
