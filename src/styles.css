@@ -222,33 +222,15 @@ button { font: inherit; }
   object-position: 51% 43%;
 }
 
-.modeled-hero::before,
 .modeled-hero::after {
   content: "";
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
-  pointer-events: none;
-}
-
-.modeled-hero::before {
-  z-index: 1;
-  height: 170px;
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 68%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 68%);
-}
-
-.modeled-hero::after {
   z-index: 2;
   height: 124px;
-  background: linear-gradient(to bottom, rgba(246, 241, 232, 0), var(--paper) 82%);
-  -webkit-backdrop-filter: blur(17px);
-  backdrop-filter: blur(17px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 60%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 60%);
+  pointer-events: none;
 }
 
 @keyframes overlay-in {
@@ -310,15 +292,7 @@ button { font: inherit; }
 }
 
 .modeled-heading {
-  position: absolute;
-  top: 24px;
-  left: 24px;
-  z-index: 6;
-  max-width: calc(100% - 108px);
-  padding: 13px 16px 14px;
-  background: rgba(246, 241, 232, .88);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
+  margin-bottom: 20px;
 }
 
 .modeled-heading h2 {
@@ -462,6 +436,33 @@ button { font: inherit; }
   align-items: center;
   gap: 10px;
   margin-top: 24px;
+}
+
+.modeled-photo-control {
+  margin-top: 22px;
+  padding-top: 18px;
+}
+
+.modeled-photo-row {
+  display: flex;
+  gap: 8px;
+}
+
+.modeled-photo-button { flex: 1; }
+.modeled-photo-refresh { flex: 1; }
+
+.modeled-photo-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.modeled-photo-error {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .unsaved-notice {
@@ -882,9 +883,7 @@ button { font: inherit; }
   .viewer { padding: max(24px, env(safe-area-inset-top)) 22px max(28px, env(safe-area-inset-bottom)); }
   .modeled-hero { flex-basis: 360px; height: 360px; }
   .modeled-hero-photo { height: 326px; object-position: 49% 43%; }
-  .modeled-hero::before { height: 150px; }
   .modeled-hero::after { height: 112px; }
-  .modeled-heading { top: 20px; left: 20px; padding: 11px 13px 12px; }
   .modeled-heading h2 { font-size: 17px; }
   .has-modeled-image .viewer-icon-close { top: 20px; right: 20px; }
   .viewer-art.viewer-art-floating { right: 15px; bottom: 0; flex-basis: auto; width: 40%; height: 158px; min-height: 0; padding: 0; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Plus, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, Check, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 
@@ -335,7 +335,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function ItemViewer({ item, onClose, onSave, onDelete }) {
+function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -346,8 +346,12 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
   const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [refreshingModeled, setRefreshingModeled] = useState(false);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
+  const modeledStatus = item.modeledGeneration?.status || null;
+  const modeledBusy = modeledStatus === "processing";
+  const modeledError = modeledStatus === "failed" ? item.modeledGeneration.error : "";
   const pieceRotation = useMemo(() => {
     const hash = [...item.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     return `${(hash % 9) - 4}deg`;
@@ -412,7 +416,39 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
     setSampleStatus("");
     setPalette(item.palette || []);
     setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
-  }, [item]);
+    setRefreshingModeled(false);
+    // Intentionally keyed on the item's identity, not the whole object—unrelated
+    // patches to the same item (e.g. modeled-photo status updates) shouldn't
+    // wipe in-progress edits or the extracted color suggestions.
+  }, [item.id]);
+
+  const generateModeledPhoto = async () => {
+    try {
+      const response = await fetch(`/api/import/wardrobe/${item.id}/modeled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const value = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(value.error || "Could not generate a modeled photo.");
+      onGenerateModeled(item.id, value);
+    } catch (requestError) {
+      onGenerateModeled(item.id, { modeledGeneration: { status: "failed", error: requestError.message } });
+    }
+  };
+
+  const refreshModeledStatus = async () => {
+    setRefreshingModeled(true);
+    try {
+      const response = await fetch(`/api/import/wardrobe/${item.id}`, { cache: "no-store" });
+      const value = await response.json().catch(() => ({}));
+      if (response.ok) onGenerateModeled(item.id, value);
+    } catch {
+      // Transient network hiccups shouldn't surface as an error—just try again later.
+    } finally {
+      setRefreshingModeled(false);
+    }
+  };
 
   const cancelEditing = () => {
     setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
@@ -485,11 +521,6 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
             quality={82}
             priority
           />
-          <div className="viewer-heading modeled-heading">
-            <div>
-              <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
-            </div>
-          </div>
           {garmentArtwork}
         </div>
       ) : (
@@ -504,6 +535,14 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
       )}
 
       <div className="viewer-details editing">
+        {hasModeledImage && (
+          <div className="viewer-heading modeled-heading">
+            <div>
+              <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
+            </div>
+          </div>
+        )}
+
         <ItemEditor
           draft={draft}
           setDraft={setDraft}
@@ -512,6 +551,24 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
           setSampling={setSampling}
           sampleStatus={sampleStatus}
         />
+
+        <div className="modeled-photo-control">
+          <div className="modeled-photo-row">
+            {modeledBusy ? (
+              <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshModeledStatus} disabled={refreshingModeled}>
+                {refreshingModeled ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
+                {refreshingModeled ? "Checking…" : "Check status"}
+              </button>
+            ) : (
+              <button className="secondary-button modeled-photo-button" type="button" onClick={generateModeledPhoto}>
+                <Sparkle size={15} weight="regular" aria-hidden="true" />
+                {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
+              </button>
+            )}
+          </div>
+          {modeledBusy && <p className="modeled-photo-status" role="status">Generating in the background—this can take up to a minute. Check back whenever you like.</p>}
+          {modeledError && <p className="modeled-photo-error" role="alert">{modeledError}</p>}
+        </div>
 
         {closeBlocked && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
 
@@ -603,6 +660,10 @@ export function App() {
     setItems((current) => current.map((item) => item.id === id ? { ...item, modeledImage } : item));
   }, []);
 
+  const patchItem = useCallback((id, patch) => {
+    setItems((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
+  }, []);
+
   return (
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
       <main className="gallery-pane">
@@ -643,7 +704,7 @@ export function App() {
         )}
       </main>
 
-      {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
+      {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onGenerateModeled={patchItem} />}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />
     </div>
   );

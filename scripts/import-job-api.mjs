@@ -135,6 +135,10 @@ Avoid: person, body, skin, hair, mannequin, hanger, props, other garments, retai
 Critical: Use no ${chromaKey} anywhere in the garment. Produce exactly one complete garment with a crisp, separable outer silhouette.`;
 }
 
+export function buildModeledPrompt() {
+  return "Create a professional horizontal 3:2 editorial fashion photograph of the person in Image 1 wearing the exact garment from Image 2. Preserve the person's recognizable identity, face, hair, age and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric, a tasteful real-world setting, and leave environmental space around the model. No text, watermark, product mockup, or synthetic appearance.";
+}
+
 function cleanupTolerance(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(18, Math.min(110, Math.round(parsed))) : 46;
@@ -421,6 +425,67 @@ export function wardrobeImportApi(options = {}) {
     return record;
   }
 
+  async function generateModeledImageBytes(record, direction) {
+    const key = setting("OPENAI_API_KEY");
+    if (!key) throw new Error("OPENAI_API_KEY is not configured");
+    const garmentFile = path.join(libraryAssetDir, `${record.id}-garment.png`);
+    let garmentData;
+    try {
+      garmentData = await readFile(garmentFile);
+    } catch (error) {
+      if (error.code === "ENOENT") throw Object.assign(new Error("This item's garment image is missing, so a modeled photo cannot be generated."), { status: 409 });
+      throw error;
+    }
+    const modelPath = path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"));
+    let modelData;
+    try {
+      modelData = await readFile(modelPath);
+    } catch (error) {
+      if (error.code === "ENOENT") throw new Error(`Model reference not found at ${modelPath}. Set WARDROBE_MODEL_REFERENCE or add data/model-reference.png.`);
+      throw error;
+    }
+    const garment = { data: garmentData, mime: "image/png", name: "garment.png" };
+    const model = { data: modelData, mime: "image/png", name: "model.png" };
+    const basePrompt = options.modeledPrompt || buildModeledPrompt();
+    const prompt = direction ? `${basePrompt}\nUser regeneration direction: ${direction}` : basePrompt;
+    return openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt });
+  }
+
+  async function updateWardrobeRecord(id, updater) {
+    const records = await loadImported();
+    const index = records.findIndex((item) => item.id === id);
+    if (index === -1) return null;
+    const updated = updater(records[index]);
+    const next = [...records];
+    next[index] = updated;
+    await atomicJson(importedFile, next);
+    return updated;
+  }
+
+  function generateModeledForWardrobeItem(id, direction) {
+    const lock = `wardrobe:${id}:modeled`;
+    if (running.has(lock)) return running.get(lock);
+    const task = (async () => {
+      try {
+        const records = await loadImported();
+        const record = records.find((item) => item.id === id);
+        if (!record) return;
+        const bytes = await generateModeledImageBytes(record, direction);
+        const assetName = `${id}-modeled.png`;
+        await writeFile(path.join(libraryAssetDir, assetName), bytes);
+        const modeledImage = `${LIBRARY_ASSET_ROOT}/${assetName}?v=${Date.now()}`;
+        await updateWardrobeRecord(id, (current) => ({ ...current, modeledImage, modeledGeneration: null }));
+      } catch (error) {
+        await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          modeledGeneration: { status: "failed", error: error.message, startedAt: current.modeledGeneration?.startedAt || new Date().toISOString() },
+        })).catch(() => {});
+      }
+    })().finally(() => running.delete(lock));
+    running.set(lock, task);
+    return task;
+  }
+
   async function generate(job, stageName) {
     const lock = `${job.id}:${stageName}`;
     if (running.has(lock)) return running.get(lock);
@@ -462,7 +527,7 @@ export function wardrobeImportApi(options = {}) {
             throw error;
           }
           const model = { data: modelData, mime: "image/png", name: "model.png" };
-          const basePrompt = options.modeledPrompt || "Create a professional horizontal 3:2 editorial fashion photograph of the person in Image 1 wearing the exact garment from Image 2. Preserve the person's recognizable identity, face, hair, age and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric, a tasteful real-world setting, and leave environmental space around the model. No text, watermark, product mockup, or synthetic appearance.";
+          const basePrompt = options.modeledPrompt || buildModeledPrompt();
           bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt: current.stages.modeled.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.modeled.prompt}` : basePrompt });
         }
         await writeFile(output, bytes);
@@ -497,9 +562,15 @@ export function wardrobeImportApi(options = {}) {
       if (url.pathname === "/api/import/config" && req.method === "GET") {
         return json(res, 200, await setupStatus());
       }
-      const wardrobeDeleteMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
-      if (wardrobeDeleteMatch && req.method === "DELETE") {
-        const id = wardrobeDeleteMatch[1];
+      const wardrobeItemMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
+      if (wardrobeItemMatch && req.method === "GET") {
+        const records = await loadImported();
+        const record = records.find((item) => item.id === wardrobeItemMatch[1]);
+        if (!record) return json(res, 404, { error: "Wardrobe item not found" });
+        return json(res, 200, record);
+      }
+      if (wardrobeItemMatch && req.method === "DELETE") {
+        const id = wardrobeItemMatch[1];
         const records = await loadImported();
         const next = records.filter((record) => record.id !== id);
         if (next.length === records.length) return json(res, 404, { error: "Imported wardrobe item not found" });
@@ -509,6 +580,30 @@ export function wardrobeImportApi(options = {}) {
           rm(path.join(libraryAssetDir, `${id}-modeled.png`), { force: true }),
         ]);
         return json(res, 200, { deleted: true, id });
+      }
+      const wardrobeModeledMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})\/modeled$/i);
+      if (wardrobeModeledMatch && req.method === "POST") {
+        const id = wardrobeModeledMatch[1];
+        const setup = await setupStatus();
+        if (!setup.ready) {
+          const missing = [
+            !setup.hasApiKey && "OPENAI_API_KEY in .env",
+            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+          ].filter(Boolean).join(" and ");
+          return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
+        }
+        const records = await loadImported();
+        const record = records.find((item) => item.id === id);
+        if (!record) return json(res, 404, { error: "Wardrobe item not found" });
+        if (record.modeledGeneration?.status === "processing") return json(res, 202, record);
+        const input = await body(req);
+        const direction = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) : "";
+        const marked = await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          modeledGeneration: { status: "processing", error: null, startedAt: new Date().toISOString() },
+        }));
+        void generateModeledForWardrobeItem(id, direction);
+        return json(res, 202, marked);
       }
       const libraryAssetMatch = url.pathname.match(/^\/api\/import\/library\/([\w.-]+)$/i);
       if (libraryAssetMatch && req.method === "GET") {
@@ -672,6 +767,14 @@ export function wardrobeImportApi(options = {}) {
       libraryAssetDir = path.join(dataDir, "imported");
       await mkdir(jobsDir, { recursive: true });
       await mkdir(libraryAssetDir, { recursive: true });
+      const importedRecords = await loadImported();
+      let importedInterrupted = false;
+      const sweptRecords = importedRecords.map((record) => {
+        if (record.modeledGeneration?.status !== "processing") return record;
+        importedInterrupted = true;
+        return { ...record, modeledGeneration: { status: "failed", error: "Generation was interrupted when the app restarted. Try again.", startedAt: record.modeledGeneration.startedAt } };
+      });
+      if (importedInterrupted) await atomicJson(importedFile, sweptRecords);
       const ids = await readdir(jobsDir).catch(() => []);
       for (const id of ids) {
         const job = await loadJob(id);
