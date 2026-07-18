@@ -431,7 +431,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled }) {
       });
       const value = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(value.error || "Could not generate a modeled photo.");
-      onGenerateModeled(item.id, value);
+      onGenerateModeled(item.id, { modeledImage: value.modeledImage, modeledGeneration: value.modeledGeneration ?? null });
     } catch (requestError) {
       onGenerateModeled(item.id, { modeledGeneration: { status: "failed", error: requestError.message } });
     }
@@ -442,7 +442,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled }) {
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}`, { cache: "no-store" });
       const value = await response.json().catch(() => ({}));
-      if (response.ok) onGenerateModeled(item.id, value);
+      if (response.ok) onGenerateModeled(item.id, { modeledImage: value.modeledImage, modeledGeneration: value.modeledGeneration ?? null });
     } catch {
       // Transient network hiccups shouldn't surface as an error—just try again later.
     } finally {
@@ -534,6 +534,24 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled }) {
         </>
       )}
 
+      <div className="modeled-photo-control">
+        <div className="modeled-photo-row">
+          {modeledBusy ? (
+            <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshModeledStatus} disabled={refreshingModeled}>
+              {refreshingModeled ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
+              {refreshingModeled ? "Checking…" : "Check status"}
+            </button>
+          ) : (
+            <button className="secondary-button modeled-photo-button" type="button" onClick={generateModeledPhoto}>
+              <Sparkle size={15} weight="regular" aria-hidden="true" />
+              {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
+            </button>
+          )}
+        </div>
+        {modeledBusy && <p className="modeled-photo-status" role="status">Generating in the background—this can take up to a minute. Check back whenever you like.</p>}
+        {modeledError && <p className="modeled-photo-error" role="alert">{modeledError}</p>}
+      </div>
+
       <div className="viewer-details editing">
         {hasModeledImage && (
           <div className="viewer-heading modeled-heading">
@@ -551,24 +569,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled }) {
           setSampling={setSampling}
           sampleStatus={sampleStatus}
         />
-
-        <div className="modeled-photo-control">
-          <div className="modeled-photo-row">
-            {modeledBusy ? (
-              <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshModeledStatus} disabled={refreshingModeled}>
-                {refreshingModeled ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
-                {refreshingModeled ? "Checking…" : "Check status"}
-              </button>
-            ) : (
-              <button className="secondary-button modeled-photo-button" type="button" onClick={generateModeledPhoto}>
-                <Sparkle size={15} weight="regular" aria-hidden="true" />
-                {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
-              </button>
-            )}
-          </div>
-          {modeledBusy && <p className="modeled-photo-status" role="status">Generating in the background—this can take up to a minute. Check back whenever you like.</p>}
-          {modeledError && <p className="modeled-photo-error" role="alert">{modeledError}</p>}
-        </div>
 
         {closeBlocked && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
 

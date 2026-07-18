@@ -443,6 +443,10 @@ button { font: inherit; }
   padding-top: 18px;
 }
 
+.has-modeled-image .modeled-photo-control {
+  padding-inline: 34px;
+}
+
 .modeled-photo-row {
   display: flex;
   gap: 8px;
@@ -832,6 +836,7 @@ button { font: inherit; }
   .category-nav { max-width: 100%; }
   .viewer { padding-inline: 30px; }
   .has-modeled-image .viewer-details.editing { padding-inline: 30px; }
+  .has-modeled-image .modeled-photo-control { padding-inline: 30px; }
 }
 
 @media (max-width: 860px) {
