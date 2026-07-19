@@ -130,7 +130,7 @@ export function ImageZoomLightbox({
         onClick={toggleZoom}
         aria-label={zoomed ? "Minimize image" : "Zoom image"}
       >
-        <img src={src} alt={alt || ""} />
+        <img src={src} alt={alt || ""} draggable={false} />
       </button>
     </div>
   );

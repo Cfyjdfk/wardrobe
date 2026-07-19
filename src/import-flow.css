@@ -82,8 +82,37 @@
 .import-tray:focus-within,
 .import-tray.is-expanded { box-shadow: 0 12px 36px rgba(25, 23, 18, 0.26); }
 
+.import-tray__status,
+.import-tray__add {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.import-tray__status {
+  flex: 1 1 auto;
+}
+
+.import-tray__add {
+  flex: 0 0 auto;
+}
+
+.import-tray__status:disabled,
+.import-tray__add:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .import-tray__button,
 .import-icon-button {
+  position: relative;
   flex: 0 0 40px;
   width: 40px;
   height: 40px;
@@ -98,11 +127,170 @@
   transition: background 160ms ease, transform 220ms var(--import-ease);
 }
 
-.import-tray__button:hover,
-.import-tray__button:focus-visible,
+.import-tray__status .import-tray__button,
+.import-tray__add .import-tray__button {
+  cursor: inherit;
+  pointer-events: none;
+}
+
+.import-tray.has-completion {
+  box-shadow: 0 12px 36px rgba(25, 23, 18, 0.26);
+}
+
+.import-tray.has-completion .import-tray__status .import-tray__button {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.import-tray__badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #f4f0e7;
+  color: #24231f;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--import-ink);
+}
+
+.import-tray__button--preview {
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.import-tray__result {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.import-completion-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.import-completion-panel__header {
+  display: grid;
+  gap: 4px;
+}
+
+.import-completion-panel__lead {
+  margin: 0;
+  color: var(--import-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.import-completion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.import-completion-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  padding: 8px 8px 8px 8px;
+  border: 1px solid var(--import-line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.import-completion-item:hover,
+.import-completion-item:focus-within {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(36, 35, 31, 0.28);
+}
+
+.import-completion-item__open {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.import-completion-item__open:focus-visible {
+  outline: 2px solid var(--import-ink);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+
+.import-completion-item__media {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--import-ivory);
+  color: var(--import-ink);
+}
+
+.import-completion-item__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.import-completion-item__meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.import-completion-item__kind {
+  color: var(--import-muted);
+  font-size: 10px;
+  font-weight: 520;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.import-completion-item__name {
+  overflow: hidden;
+  color: var(--import-ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-completion-item__dismiss {
+  flex-shrink: 0;
+}
+
+.import-tray__status:hover .import-tray__button,
+.import-tray__status:focus-visible .import-tray__button,
+.import-tray__add:hover .import-tray__button,
+.import-tray__add:focus-visible .import-tray__button,
 .import-icon-button:hover,
 .import-icon-button:focus-visible { background: rgba(255, 255, 255, 0.12); outline: none; }
-.import-tray__button:active, .import-icon-button:active { transform: scale(0.94); }
+.import-tray__status:active .import-tray__button,
+.import-tray__add:active .import-tray__button,
+.import-icon-button:active { transform: scale(0.94); }
+.import-tray__status:focus-visible,
+.import-tray__add:focus-visible { outline: none; }
 
 .import-tray__actions {
   display: flex;
@@ -119,11 +307,15 @@
 
 .import-tray:hover .import-tray__actions,
 .import-tray:focus-within .import-tray__actions,
-.import-tray.is-expanded .import-tray__actions {
+.import-tray.is-expanded .import-tray__status .import-tray__actions {
   max-width: min(420px, calc(100vw - 92px));
   opacity: 1;
   transform: none;
   pointer-events: auto;
+}
+
+.import-tray.is-expanded .import-tray__status .import-tray__actions {
+  pointer-events: none;
 }
 
 .import-tray__label {

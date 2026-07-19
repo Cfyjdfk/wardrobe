@@ -1,7 +1,8 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
+import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
 import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 
@@ -71,6 +72,17 @@ function arrowNavigationDelta(key) {
   if (key === "ArrowLeft" || key === "ArrowUp") return -1;
   if (key === "ArrowRight" || key === "ArrowDown") return 1;
   return 0;
+}
+
+function lockBodyScroll() {
+  const scrollY = window.scrollY;
+  document.body.classList.add("viewer-open");
+  document.body.style.top = `-${scrollY}px`;
+  return () => {
+    document.body.classList.remove("viewer-open");
+    document.body.style.top = "";
+    window.scrollTo(0, scrollY);
+  };
 }
 
 function formatTokenCount(count) {
@@ -291,7 +303,24 @@ function sampleImageColor(image, canvas, event) {
   return null;
 }
 
-function GalleryItem({ item, selected, onOpen }) {
+const GALLERY_SKELETON_COUNT = 12;
+
+function GallerySkeleton({ count = GALLERY_SKELETON_COUNT }) {
+  return (
+    <section className="gallery-grid gallery-grid--skeleton" aria-busy="true" aria-label="Loading wardrobe">
+      {Array.from({ length: count }, (_, index) => (
+        <div
+          key={index}
+          className="gallery-skeleton-item"
+          style={{ "--skeleton-delay": `${index * 45}ms` }}
+          aria-hidden="true"
+        />
+      ))}
+    </section>
+  );
+}
+
+const GalleryItem = memo(function GalleryItem({ item, selected, onOpen }) {
   const type = TYPE_MAP[item.part]?.singular || "wardrobe item";
   const dragMoved = useRef(false);
 
@@ -333,9 +362,9 @@ function GalleryItem({ item, selected, onOpen }) {
       />
     </button>
   );
-}
+});
 
-function GallerySearch({ value, onChange }) {
+function GallerySearch({ value, onChange, placeholder = "Search name or details", label = "Search" }) {
   const inputRef = useRef(null);
   const [open, setOpen] = useState(false);
   const expanded = open || !!value.trim();
@@ -349,7 +378,7 @@ function GallerySearch({ value, onChange }) {
           setOpen(true);
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        aria-label={expanded ? "Search garments and outfits" : "Open search"}
+        aria-label={expanded ? label : "Open search"}
       >
         <MagnifyingGlass size={17} weight="bold" aria-hidden="true" />
       </button>
@@ -363,8 +392,8 @@ function GallerySearch({ value, onChange }) {
           onBlur={() => {
             if (!value.trim()) setOpen(false);
           }}
-          placeholder="Search name or details"
-          aria-label="Search garments and outfits"
+          placeholder={placeholder}
+          aria-label={label}
           autoComplete="off"
           spellCheck="false"
         />
@@ -493,16 +522,12 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
   );
 }
 
-function OutfitsSection({ outfits, selectedId, onOpen }) {
+const OutfitsSection = memo(function OutfitsSection({ outfits, selectedId, onOpen }) {
   const visible = outfits.filter((outfit) => outfit.status !== "processing");
   if (!visible.length) return null;
 
   return (
     <section className="outfits-section" aria-label="Outfits">
-      <header className="outfits-header">
-        <h2 className="outfits-title">Outfits</h2>
-        <p className="outfits-count">{visible.length} {visible.length === 1 ? "look" : "looks"}</p>
-      </header>
       <div className="outfits-grid">
         {visible.map((outfit) => {
           const canOpen = outfit.status === "ready" || outfit.status === "failed";
@@ -521,6 +546,7 @@ function OutfitsSection({ outfits, selectedId, onOpen }) {
                 <OptimizedImage
                   src={outfit.image}
                   alt=""
+                  draggable={false}
                   sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 220px"
                   breakpoints={[160, 220, 320, 440]}
                 />
@@ -536,7 +562,66 @@ function OutfitsSection({ outfits, selectedId, onOpen }) {
       </div>
     </section>
   );
-}
+});
+
+const GarmentsPanel = memo(function GarmentsPanel({
+  loading,
+  error,
+  itemsLength,
+  visibleItems,
+  selectedId,
+  onOpen,
+  activeType,
+}) {
+  return (
+    <>
+      {!error && loading && <GallerySkeleton />}
+      {!error && !loading && !itemsLength && <p className="status empty">Drop, paste, or add a photo to import your first piece.</p>}
+      {!error && !loading && !!itemsLength && !visibleItems.length && (
+        <p className="status empty">No garments match this search.</p>
+      )}
+      {!loading && !!visibleItems.length && (
+        <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}>
+          {visibleItems.map((item) => (
+            <GalleryItem
+              key={item.id}
+              item={item}
+              selected={selectedId === item.id}
+              onOpen={onOpen}
+            />
+          ))}
+        </section>
+      )}
+    </>
+  );
+});
+
+const OutfitsPanel = memo(function OutfitsPanel({
+  error,
+  listedCount,
+  totalCount,
+  searching,
+  outfits,
+  selectedId,
+  onOpen,
+}) {
+  return (
+    <>
+      {!error && !listedCount && (
+        <p className="status empty">
+          {searching
+            ? "No outfits match this search."
+            : totalCount
+              ? "No outfits to show."
+              : "Generate an outfit from the composer to build your first look."}
+        </p>
+      )}
+      {!error && !!listedCount && (
+        <OutfitsSection outfits={outfits} selectedId={selectedId} onOpen={onOpen} />
+      )}
+    </>
+  );
+});
 
 function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext }) {
   const closeButtonRef = useRef(null);
@@ -587,10 +672,10 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
 
   useEffect(() => {
-    document.body.classList.add("viewer-open");
+    const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
     return () => {
-      document.body.classList.remove("viewer-open");
+      unlock();
       clearTimeout(shakeTimerRef.current);
     };
   }, [outfit.id]);
@@ -668,6 +753,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
                 className="modeled-hero-photo"
                 src={outfit.image}
                 alt={name.trim() || outfit.name || "Outfit"}
+                draggable={false}
                 sizes="(max-width: 860px) 100vw, 520px"
                 breakpoints={[320, 480, 640, 800, 1040, 1280]}
                 quality={82}
@@ -736,6 +822,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
                           <OptimizedImage
                             src={item.thumbnail || item.image}
                             alt=""
+                            draggable={false}
                             sizes="120px"
                             breakpoints={[96, 120, 160, 240]}
                           />
@@ -955,14 +1042,19 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
-  const [refreshingModeled, setRefreshingModeled] = useState(false);
-  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [refreshingGeneration, setRefreshingGeneration] = useState(false);
+  const [confirmKind, setConfirmKind] = useState(null);
+  const [regenPrompt, setRegenPrompt] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
   const modeledStatus = item.modeledGeneration?.status || null;
   const modeledBusy = modeledStatus === "processing";
   const modeledError = modeledStatus === "failed" ? item.modeledGeneration.error : "";
+  const garmentStatus = item.garmentGeneration?.status || null;
+  const garmentBusy = garmentStatus === "processing";
+  const garmentError = garmentStatus === "failed" ? item.garmentGeneration.error : "";
+  const generationBusy = modeledBusy || garmentBusy;
   const pieceRotation = useMemo(() => {
     const hash = [...item.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     return `${(hash % 9) - 4}deg`;
@@ -1014,10 +1106,10 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
 
   useEffect(() => {
-    document.body.classList.add("viewer-open");
+    const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
     return () => {
-      document.body.classList.remove("viewer-open");
+      unlock();
       clearTimeout(shakeTimerRef.current);
     };
   }, [item.id]);
@@ -1027,13 +1119,15 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       if (zoomImage) return;
       if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") {
-        if (confirmRegenerate) setConfirmRegenerate(false);
-        else if (sampling) setSampling(null);
+        if (confirmKind) {
+          setConfirmKind(null);
+          setRegenPrompt("");
+        } else if (sampling) setSampling(null);
         else if (onBackToOutfit) requestBack();
         else requestClose();
         return;
       }
-      if (confirmRegenerate) return;
+      if (confirmKind) return;
       const delta = arrowNavigationDelta(event.key);
       if (!delta) return;
       event.preventDefault();
@@ -1042,15 +1136,16 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [confirmRegenerate, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
+  }, [confirmKind, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
 
   useEffect(() => {
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
     setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
-    setRefreshingModeled(false);
-    setConfirmRegenerate(false);
+    setRefreshingGeneration(false);
+    setConfirmKind(null);
+    setRegenPrompt("");
     setCloseBlocked(false);
     setZoomImage((current) => {
       if (!current) return null;
@@ -1072,37 +1167,82 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     // wipe in-progress edits or the extracted color suggestions.
   }, [item.id]);
 
-  const generateModeledPhoto = async () => {
-    setConfirmRegenerate(false);
+  const generateModeledPhoto = async (prompt = "") => {
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}/modeled`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(prompt ? { prompt } : {}),
       });
       const value = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(value.error || "Could not generate a modeled photo.");
-      onGenerateModeled(item.id, { modeledImage: value.modeledImage, modeledGeneration: value.modeledGeneration ?? null });
+      onGenerateModeled(item.id, {
+        modeledImage: value.modeledImage,
+        modeledGeneration: value.modeledGeneration ?? null,
+        costs: value.costs ?? item.costs,
+      });
     } catch (requestError) {
       onGenerateModeled(item.id, { modeledGeneration: { status: "failed", error: requestError.message } });
     }
   };
 
-  const requestModeledPhoto = () => {
-    if (hasModeledImage) setConfirmRegenerate(true);
-    else generateModeledPhoto();
+  const generateGarmentPhoto = async (prompt = "") => {
+    try {
+      const response = await fetch(`/api/import/wardrobe/${item.id}/garment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(prompt ? { prompt } : {}),
+      });
+      const value = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(value.error || "Could not regenerate the garment.");
+      onGenerateModeled(item.id, {
+        image: value.image ?? item.image,
+        thumbnail: value.thumbnail ?? value.image ?? item.thumbnail,
+        garmentGeneration: value.garmentGeneration ?? null,
+        costs: value.costs ?? item.costs,
+      });
+    } catch (requestError) {
+      onGenerateModeled(item.id, { garmentGeneration: { status: "failed", error: requestError.message } });
+    }
   };
 
-  const refreshModeledStatus = async () => {
-    setRefreshingModeled(true);
+  const openConfirm = (kind) => {
+    setRegenPrompt("");
+    setConfirmKind(kind);
+  };
+
+  const closeConfirm = () => {
+    setConfirmKind(null);
+    setRegenPrompt("");
+  };
+
+  const confirmRegenerateAction = async () => {
+    const prompt = regenPrompt.trim();
+    const kind = confirmKind;
+    closeConfirm();
+    if (kind === "garment") await generateGarmentPhoto(prompt);
+    else if (kind === "modeled") await generateModeledPhoto(prompt);
+  };
+
+  const refreshGenerationStatus = async () => {
+    setRefreshingGeneration(true);
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}`, { cache: "no-store" });
       const value = await response.json().catch(() => ({}));
-      if (response.ok) onGenerateModeled(item.id, { modeledImage: value.modeledImage, modeledGeneration: value.modeledGeneration ?? null });
+      if (response.ok) {
+        onGenerateModeled(item.id, {
+          image: value.image ?? item.image,
+          thumbnail: value.thumbnail ?? item.thumbnail,
+          modeledImage: value.modeledImage,
+          modeledGeneration: value.modeledGeneration ?? null,
+          garmentGeneration: value.garmentGeneration ?? null,
+          costs: value.costs ?? item.costs,
+        });
+      }
     } catch {
       // Transient network hiccups shouldn't surface as an error—just try again later.
     } finally {
-      setRefreshingModeled(false);
+      setRefreshingGeneration(false);
     }
   };
 
@@ -1151,6 +1291,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
         ref={imageRef}
         src={item.image}
         alt={`Selected ${type.toLowerCase()}`}
+        draggable={false}
         sizes="(max-width: 520px) 40vw, 300px"
         breakpoints={[160, 240, 320, 480, 640]}
         priority
@@ -1188,6 +1329,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
               className="modeled-hero-photo"
               src={item.modeledImage}
               alt={`${draft.name || type} worn by a model`}
+              draggable={false}
               sizes="(max-width: 860px) 100vw, 520px"
               breakpoints={[320, 480, 640, 800, 1040, 1280]}
               quality={82}
@@ -1210,49 +1352,91 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
       <div className="modeled-photo-control">
         <div className="modeled-photo-row">
-          {modeledBusy ? (
-            <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshModeledStatus} disabled={refreshingModeled}>
-              {refreshingModeled ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
-              {refreshingModeled ? "Checking…" : "Check status"}
+          {generationBusy ? (
+            <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshGenerationStatus} disabled={refreshingGeneration}>
+              {refreshingGeneration ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
+              {refreshingGeneration
+                ? "Checking…"
+                : garmentBusy && modeledBusy
+                  ? "Check status"
+                  : garmentBusy
+                    ? "Check garment status"
+                    : "Check modeled status"}
             </button>
           ) : (
-            <button className="secondary-button modeled-photo-button" type="button" onClick={requestModeledPhoto}>
-              <Sparkle size={15} weight="regular" aria-hidden="true" />
-              {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
-            </button>
+            <>
+              <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("garment")} disabled={garmentBusy}>
+                <ArrowClockwise size={15} weight="regular" aria-hidden="true" />
+                Regenerate garment
+              </button>
+              <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("modeled")}>
+                <Sparkle size={15} weight="regular" aria-hidden="true" />
+                {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
+              </button>
+            </>
           )}
         </div>
-        {modeledBusy && <p className="modeled-photo-status" role="status">Generating in the background—this can take up to a minute. Check back whenever you like.</p>}
+        {garmentBusy && <p className="modeled-photo-status" role="status">Regenerating the garment in the background—this can take up to a minute.</p>}
+        {modeledBusy && <p className="modeled-photo-status" role="status">Generating the modeled photo in the background—this can take up to a minute.</p>}
+        {garmentError && <p className="modeled-photo-error" role="alert">{garmentError}</p>}
         {modeledError && <p className="modeled-photo-error" role="alert">{modeledError}</p>}
       </div>
 
-      {confirmRegenerate && (
+      {confirmKind && (
         <div
           className="confirm-modal-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setConfirmRegenerate(false);
+            if (event.target === event.currentTarget) closeConfirm();
           }}
         >
           <section
-            className="confirm-modal"
+            className="confirm-modal confirm-modal--regen"
             role="alertdialog"
             aria-modal="true"
-            aria-labelledby="regenerate-modeled-title"
-            aria-describedby="regenerate-modeled-detail"
+            aria-labelledby="regenerate-look-title"
+            aria-describedby="regenerate-look-detail"
           >
-            <p className="confirm-modal-eyebrow">Modeled photo</p>
-            <h3 className="confirm-modal-title" id="regenerate-modeled-title">Regenerate this look?</h3>
-            <p className="confirm-modal-detail" id="regenerate-modeled-detail">
-              A new modeled photo will replace the current one. This can take up to a minute.
+            <p className="confirm-modal-eyebrow">{confirmKind === "garment" ? "Garment image" : "Modeled photo"}</p>
+            <h3 className="confirm-modal-title" id="regenerate-look-title">
+              {confirmKind === "garment"
+                ? "Regenerate this garment?"
+                : hasModeledImage
+                  ? "Regenerate this look?"
+                  : "Generate a modeled photo?"}
+            </h3>
+            <p className="confirm-modal-detail" id="regenerate-look-detail">
+              {confirmKind === "garment"
+                ? "A new garment cutout will replace the current one. This can take up to a minute."
+                : hasModeledImage
+                  ? "A new modeled photo will replace the current one. This can take up to a minute."
+                  : "This can take up to a minute. You can keep browsing while it runs."}
             </p>
+            <label className="confirm-modal-prompt">
+              <span>Direction <em>optional</em></span>
+              <textarea
+                rows={3}
+                value={regenPrompt}
+                onChange={(event) => setRegenPrompt(event.target.value)}
+                maxLength={1200}
+                placeholder={
+                  confirmKind === "garment"
+                    ? "e.g. preserve the original zipper and remove the retail tag"
+                    : "e.g. quiet evening street, show the full garment"
+                }
+              />
+            </label>
             <div className="confirm-modal-actions">
-              <button className="secondary-button" type="button" onClick={() => setConfirmRegenerate(false)}>
+              <button className="secondary-button" type="button" onClick={closeConfirm}>
                 Cancel
               </button>
-              <button className="primary-button" type="button" onClick={generateModeledPhoto}>
-                <Sparkle size={15} weight="fill" aria-hidden="true" />
-                Regenerate
+              <button className="primary-button" type="button" onClick={confirmRegenerateAction}>
+                {confirmKind === "garment" ? (
+                  <ArrowClockwise size={15} weight="bold" aria-hidden="true" />
+                ) : (
+                  <Sparkle size={15} weight="fill" aria-hidden="true" />
+                )}
+                {confirmKind === "garment" || hasModeledImage ? "Regenerate" : "Generate"}
               </button>
             </div>
           </section>
@@ -1310,6 +1494,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
 export function App() {
   const [items, setItems] = useState([]);
+  const [libraryTab, setLibraryTab] = useState("garments");
   const [activeType, setActiveType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery.trim());
@@ -1322,6 +1507,8 @@ export function App() {
   const [outfits, setOutfits] = useState([]);
   const [selectedOutfitId, setSelectedOutfitId] = useState(null);
   const [returnOutfitId, setReturnOutfitId] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     fetch("/api/import/wardrobe", { cache: "no-store" })
@@ -1363,15 +1550,15 @@ export function App() {
     return () => clearInterval(timer);
   }, [outfits]);
 
-  const processingModeledIds = items
-    .filter((item) => item.modeledGeneration?.status === "processing")
+  const processingGenerationIds = items
+    .filter((item) => item.modeledGeneration?.status === "processing" || item.garmentGeneration?.status === "processing")
     .map((item) => item.id)
     .sort()
     .join(",");
 
   useEffect(() => {
-    if (!processingModeledIds) return undefined;
-    const ids = processingModeledIds.split(",");
+    if (!processingGenerationIds) return undefined;
+    const ids = processingGenerationIds.split(",");
     const timer = setInterval(() => {
       Promise.all(
         ids.map((id) =>
@@ -1386,8 +1573,11 @@ export function App() {
             const record = records.find((entry) => entry?.id === item.id);
             if (!record) return item;
             if (
-              record.modeledImage === item.modeledImage
+              record.image === item.image
+              && record.thumbnail === item.thumbnail
+              && record.modeledImage === item.modeledImage
               && JSON.stringify(record.modeledGeneration ?? null) === JSON.stringify(item.modeledGeneration ?? null)
+              && JSON.stringify(record.garmentGeneration ?? null) === JSON.stringify(item.garmentGeneration ?? null)
               && JSON.stringify(record.costs ?? null) === JSON.stringify(item.costs ?? null)
             ) {
               return item;
@@ -1395,8 +1585,11 @@ export function App() {
             changed = true;
             return {
               ...item,
+              image: record.image ?? item.image,
+              thumbnail: record.thumbnail ?? item.thumbnail,
               modeledImage: record.modeledImage ?? item.modeledImage,
               modeledGeneration: record.modeledGeneration ?? null,
+              garmentGeneration: record.garmentGeneration ?? null,
               costs: record.costs ?? item.costs,
             };
           });
@@ -1405,7 +1598,7 @@ export function App() {
       });
     }, 1200);
     return () => clearInterval(timer);
-  }, [processingModeledIds]);
+  }, [processingGenerationIds]);
 
   const selectedItem = items.find((item) => item.id === selectedId) || null;
   const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
@@ -1417,15 +1610,21 @@ export function App() {
   }, [items, selectedOutfit]);
 
   const openItem = useCallback((id) => {
+    setLibraryTab((current) => (current === "garments" ? current : "garments"));
     setReturnOutfitId(null);
     setSelectedOutfitId(null);
     setSelectedId(id);
   }, []);
 
   const openOutfit = useCallback((id) => {
+    setLibraryTab((current) => (current === "outfits" ? current : "outfits"));
     setReturnOutfitId(null);
     setSelectedId(null);
     setSelectedOutfitId(id);
+  }, []);
+
+  const chooseLibraryTab = useCallback((tab) => {
+    setLibraryTab((current) => (current === tab ? current : tab));
   }, []);
 
   const openGarmentFromOutfit = useCallback((garmentId) => {
@@ -1436,6 +1635,7 @@ export function App() {
 
   const backToOutfit = useCallback(() => {
     if (!returnOutfitId) return;
+    setLibraryTab((current) => (current === "outfits" ? current : "outfits"));
     setSelectedId(null);
     setSelectedOutfitId(returnOutfitId);
     setReturnOutfitId(null);
@@ -1495,21 +1695,36 @@ export function App() {
   }, [activeType, deferredSearchQuery, garmentFuse, items, itemsById]);
 
   const visibleOutfits = useMemo(() => {
-    const matchesType = (outfit) => {
-      if (activeType === "all") return true;
-      return (outfit.garmentIds || []).some((id) => itemsById.get(id)?.part === activeType);
-    };
-
     if (deferredSearchQuery) {
       const rankedIds = outfitFuse.search(deferredSearchQuery).map((result) => result.item.id);
       const rank = new Map(rankedIds.map((id, index) => [id, index]));
       return outfits
-        .filter((outfit) => rank.has(outfit.id) && matchesType(outfit))
+        .filter((outfit) => rank.has(outfit.id))
         .sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
     }
 
-    return outfits.filter(matchesType);
-  }, [activeType, deferredSearchQuery, itemsById, outfitFuse, outfits]);
+    return outfits;
+  }, [deferredSearchQuery, outfitFuse, outfits]);
+
+  const listedOutfits = useMemo(
+    () => visibleOutfits.filter((outfit) => outfit.status !== "processing"),
+    [visibleOutfits],
+  );
+
+  const totalOutfitCount = useMemo(
+    () => outfits.filter((outfit) => outfit.status !== "processing").length,
+    [outfits],
+  );
+
+  const garmentMatchCount = useMemo(() => {
+    if (!deferredSearchQuery) return null;
+    return garmentFuse.search(deferredSearchQuery).length;
+  }, [deferredSearchQuery, garmentFuse]);
+
+  const outfitMatchCount = useMemo(() => {
+    if (!deferredSearchQuery) return null;
+    return listedOutfits.length;
+  }, [deferredSearchQuery, listedOutfits.length]);
 
   const browseableOutfitIds = useMemo(
     () => visibleOutfits.filter((outfit) => outfit.status === "ready" || outfit.status === "failed").map((outfit) => outfit.id),
@@ -1561,7 +1776,7 @@ export function App() {
       if (!response.ok && response.status !== 404) throw new Error("Could not delete the outfit.");
     } catch (requestError) {
       setError(requestError.message);
-      return;
+      throw requestError;
     }
     setOutfits((current) => current.filter((outfit) => outfit.id !== id));
     setSelectedOutfitId(null);
@@ -1583,14 +1798,14 @@ export function App() {
     persistEdit(updatedItem);
   };
 
-  const deleteItem = async (id) => {
+  const deleteItem = useCallback(async (id) => {
     if (id.startsWith("import-")) {
       try {
         const response = await fetch(`/api/import/wardrobe/${id}`, { method: "DELETE" });
         if (!response.ok && response.status !== 404) throw new Error("Could not delete the imported item.");
       } catch (requestError) {
         setError(requestError.message);
-        return;
+        throw requestError;
       }
     }
     setItems((current) => current.filter((item) => item.id !== id));
@@ -1599,7 +1814,44 @@ export function App() {
     persistDeletedItem(id);
     setSelectedId(null);
     setReturnOutfitId(null);
-  };
+  }, []);
+
+  const requestDeleteItem = useCallback((id) => {
+    const item = items.find((entry) => entry.id === id);
+    setDeleteConfirm({
+      kind: "item",
+      id,
+      eyebrow: "Garment",
+      title: `Delete ${item?.name || "this garment"}?`,
+      detail: "It will be removed from your wardrobe. This can’t be undone.",
+    });
+  }, [items]);
+
+  const requestDeleteOutfit = useCallback((id) => {
+    const outfit = outfits.find((entry) => entry.id === id);
+    setDeleteConfirm({
+      kind: "outfit",
+      id,
+      eyebrow: "Outfit",
+      title: `Delete ${outfit?.name || "this outfit"}?`,
+      detail: "The look will be removed. The garments in your wardrobe stay.",
+      confirmLabel: outfit?.status === "processing" ? "Cancel generation" : "Delete",
+    });
+  }, [outfits]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteConfirm || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      if (deleteConfirm.kind === "outfit") await deleteOutfit(deleteConfirm.id);
+      else await deleteItem(deleteConfirm.id);
+      setDeleteConfirm(null);
+    } catch {
+      // Errors are surfaced via setError inside the delete helpers.
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteBusy, deleteConfirm, deleteItem, deleteOutfit]);
 
   const addImportedItem = useCallback((newItem) => {
     setItems((current) => {
@@ -1636,7 +1888,8 @@ export function App() {
         nextError = "";
         return current;
       }
-      if (current.some((entry) => entry.part === item.part)) {
+      const allowsMultiple = item.part === "accessories_up";
+      if (!allowsMultiple && current.some((entry) => entry.part === item.part)) {
         nextError = `Only one ${TYPE_MAP[item.part]?.singular || "item"} can be added.`;
         return current;
       }
@@ -1688,18 +1941,70 @@ export function App() {
             onRemove={removeFromComposer}
             onGenerate={generateOutfit}
           />
-          <GallerySearch value={searchQuery} onChange={setSearchQuery} />
+          <GallerySearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
+            label={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
+          />
         </div>
 
         <header className="gallery-header">
           <div className="gallery-meta-row">
-            <p className="piece-count">
-              {deferredSearchQuery
-                ? `${visibleItems.length} ${visibleItems.length === 1 ? "match" : "matches"}`
-                : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`}
-            </p>
+            <nav className="library-tabs" aria-label="Library">
+              <button
+                type="button"
+                className={libraryTab === "garments" ? "active" : ""}
+                onClick={() => chooseLibraryTab("garments")}
+                aria-pressed={libraryTab === "garments"}
+                aria-label={
+                  garmentMatchCount == null
+                    ? "Garments"
+                    : `Garments, ${garmentMatchCount} ${garmentMatchCount === 1 ? "match" : "matches"}`
+                }
+              >
+                Garments
+                {garmentMatchCount != null && (
+                  <span className="library-tab-badge" aria-hidden="true">
+                    {garmentMatchCount > 99 ? "99+" : garmentMatchCount}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={libraryTab === "outfits" ? "active" : ""}
+                onClick={() => chooseLibraryTab("outfits")}
+                aria-pressed={libraryTab === "outfits"}
+                aria-label={
+                  outfitMatchCount == null
+                    ? "Outfits"
+                    : `Outfits, ${outfitMatchCount} ${outfitMatchCount === 1 ? "match" : "matches"}`
+                }
+              >
+                Outfits
+                {outfitMatchCount != null && (
+                  <span className="library-tab-badge" aria-hidden="true">
+                    {outfitMatchCount > 99 ? "99+" : outfitMatchCount}
+                  </span>
+                )}
+              </button>
+            </nav>
+            {loading && libraryTab === "garments" ? (
+              <span className="piece-count-skeleton" aria-hidden="true" />
+            ) : (
+              <p className="piece-count">
+                {libraryTab === "outfits"
+                  ? `${totalOutfitCount} ${totalOutfitCount === 1 ? "look" : "looks"}`
+                  : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`}
+              </p>
+            )}
           </div>
-          <nav className="category-nav" aria-label="Filter wardrobe by item type">
+          <nav
+            className="category-nav"
+            aria-label="Filter wardrobe by item type"
+            aria-disabled={loading || undefined}
+            hidden={libraryTab !== "garments"}
+          >
             {TYPES.map((type) => (
               <button
                 key={type.id}
@@ -1707,6 +2012,8 @@ export function App() {
                 className={activeType === type.id ? "active" : ""}
                 onClick={() => chooseType(type.id)}
                 aria-pressed={activeType === type.id}
+                disabled={loading}
+                tabIndex={libraryTab === "garments" ? undefined : -1}
               >
                 {type.label}
               </button>
@@ -1715,26 +2022,30 @@ export function App() {
         </header>
 
         {error && <p className="status error">{error}</p>}
-        {!error && loading && <p className="status">Loading wardrobe</p>}
-        {!error && !loading && !items.length && <p className="status empty">Drop, paste, or add a photo to import your first piece.</p>}
-        {!error && !loading && !!items.length && !visibleItems.length && (
-          <p className="status empty">No garments match this search.</p>
-        )}
 
-        {!!visibleItems.length && (
-          <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}>
-            {visibleItems.map((item) => (
-              <GalleryItem
-                key={item.id}
-                item={item}
-                selected={selectedId === item.id}
-                onOpen={openItem}
-              />
-            ))}
-          </section>
-        )}
+        <div className="library-panel" hidden={libraryTab !== "garments"}>
+          <GarmentsPanel
+            loading={loading}
+            error={error}
+            itemsLength={items.length}
+            visibleItems={visibleItems}
+            selectedId={selectedId}
+            onOpen={openItem}
+            activeType={activeType}
+          />
+        </div>
 
-        <OutfitsSection outfits={visibleOutfits} selectedId={selectedOutfitId} onOpen={openOutfit} />
+        <div className="library-panel" hidden={libraryTab !== "outfits"}>
+          <OutfitsPanel
+            error={error}
+            listedCount={listedOutfits.length}
+            totalCount={totalOutfitCount}
+            searching={Boolean(deferredSearchQuery)}
+            outfits={visibleOutfits}
+            selectedId={selectedOutfitId}
+            onOpen={openOutfit}
+          />
+        </div>
       </main>
 
       {selectedItem && (
@@ -1742,7 +2053,7 @@ export function App() {
           item={selectedItem}
           onClose={closeItemViewer}
           onSave={saveItem}
-          onDelete={deleteItem}
+          onDelete={requestDeleteItem}
           onGenerateModeled={patchItem}
           onBackToOutfit={returnOutfitId ? backToOutfit : null}
           onNavigate={navigateItem}
@@ -1755,7 +2066,7 @@ export function App() {
           outfit={selectedOutfit}
           garments={selectedOutfitGarments}
           onClose={() => setSelectedOutfitId(null)}
-          onDelete={deleteOutfit}
+          onDelete={requestDeleteOutfit}
           onSave={saveOutfitName}
           onOpenGarment={openGarmentFromOutfit}
           onNavigate={navigateOutfit}
@@ -1767,9 +2078,29 @@ export function App() {
         onGarmentApproved={addImportedItem}
         onModeledApproved={attachImportedModeledImage}
         processingOutfits={outfits.filter((outfit) => outfit.status === "processing")}
-        processingGarments={items.filter((item) => item.modeledGeneration?.status === "processing")}
-        onDeleteOutfit={deleteOutfit}
+        processingGarments={items.filter((item) => item.modeledGeneration?.status === "processing" || item.garmentGeneration?.status === "processing")}
+        outfits={outfits}
+        wardrobeItems={items}
+        onDeleteOutfit={requestDeleteOutfit}
+        onOpenCompletion={(entry) => {
+          if (entry.kind === "outfit") openOutfit(entry.id);
+          else openItem(entry.id);
+        }}
       />
+      {deleteConfirm && (
+        <ConfirmDeleteModal
+          eyebrow={deleteConfirm.eyebrow}
+          title={deleteConfirm.title}
+          detail={deleteConfirm.detail}
+          confirmLabel={deleteConfirm.confirmLabel}
+          busy={deleteBusy}
+          elevated={deleteConfirm.kind === "outfit" && !selectedOutfit}
+          onCancel={() => {
+            if (!deleteBusy) setDeleteConfirm(null);
+          }}
+          onConfirm={confirmDelete}
+        />
+      )}
     </div>
   );
 }

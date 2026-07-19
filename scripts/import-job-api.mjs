@@ -372,7 +372,7 @@ async function openAIAnalyze({ key, baseUrl, model, image, mime }) {
     body: JSON.stringify({
       model,
       input: [{ role: "user", content: [
-        { type: "input_text", text: "Identify every distinct wearable clothing item visible in this image. A photo may show one isolated garment or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body and non-wearable background objects. For each item, include a tight bounding box around only that item using integer coordinates normalized to a 1000 by 1000 image: x and y are the top-left corner, followed by width and height. Boxes may overlap when garments overlap, but each box must focus on one distinct item. Use only these category ids: upperbody, wholebody_up, lowerbody, accessories_up, shoes. Suggest a concise specific name, primary hex color, optional genuinely distinct secondary hex color, and 1-4 useful lowercase detail tags." },
+        { type: "input_text", text: "Identify every distinct wearable clothing item visible in this image. A photo may show one isolated garment or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body and non-wearable background objects. For each item, include a tight bounding box around only that item using integer coordinates normalized to a 1000 by 1000 image: x and y are the top-left corner, followed by width and height. Boxes may overlap when garments overlap, but each box must focus on one distinct item. Use only these category ids: upperbody, wholebody_up, lowerbody, accessories_up, shoes. Category rules (important): upperbody = inner/main tops only (t-shirts, shirts, polos, blouses, thin sweaters worn as the base layer). wholebody_up = outer layers meant to go over a top (jackets, coats, blazers, zip-up fleeces, windbreakers, overshirts worn as outerwear). Never classify a jacket, coat, blazer, or zip-up outer layer as upperbody. lowerbody = pants, shorts, skirts. accessories_up = bags, hats, belts, jewelry, scarves, and other accessories. shoes = footwear. Suggest a concise specific name, primary hex color, optional genuinely distinct secondary hex color, and 1-4 useful lowercase detail tags." },
         { type: "input_image", image_url: `data:${mime};base64,${image.toString("base64")}` },
       ] }],
       text: { format: { type: "json_schema", name: "wardrobe_items", strict: true, schema: { type: "object", additionalProperties: false, properties: { items: { type: "array", minItems: 0, maxItems: 8, items: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, part: { type: "string", enum: ["upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes"] }, color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, secondaryColor: { anyOf: [{ type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, { type: "null" }] }, tags: { type: "array", items: { type: "string" }, maxItems: 4 }, boundingBox: { type: "object", additionalProperties: false, properties: { x: { type: "integer", minimum: 0, maximum: 999 }, y: { type: "integer", minimum: 0, maximum: 999 }, width: { type: "integer", minimum: 1, maximum: 1000 }, height: { type: "integer", minimum: 1, maximum: 1000 } }, required: ["x", "y", "width", "height"] } }, required: ["name", "part", "color", "secondaryColor", "tags", "boundingBox"] } } }, required: ["items"] } } },
@@ -517,10 +517,17 @@ export function wardrobeImportApi(options = {}) {
     const id = `import-${job.id}`;
     await mkdir(libraryAssetDir, { recursive: true });
     const garmentName = `${id}-garment.png`;
+    const sourceName = `${id}-source.png`;
     const garmentSource = job.stages.garment.assetUrl
       ? path.basename(new URL(job.stages.garment.assetUrl, "http://localhost").pathname)
       : `garment-${job.stages.garment.attempts}.png`;
     await copyFile(path.join(jobsDir, job.id, garmentSource), path.join(libraryAssetDir, garmentName));
+    const cropSource = job.internal?.cropFile || "crop.png";
+    try {
+      await copyFile(path.join(jobsDir, job.id, cropSource), path.join(libraryAssetDir, sourceName));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     let modeledImage = null;
     if (includeModeled) {
       const modeledName = `${id}-modeled.png`;
@@ -555,6 +562,96 @@ export function wardrobeImportApi(options = {}) {
     const next = [...records.filter((item) => item.id !== id), record];
     await atomicJson(importedFile, next);
     return record;
+  }
+
+  async function resolveGarmentSource(record) {
+    const candidates = [];
+    if (record.importJobId) {
+      candidates.push(
+        path.join(jobsDir, record.importJobId, "crop.png"),
+        path.join(jobsDir, record.importJobId, "original.png"),
+      );
+    }
+    candidates.push(
+      path.join(libraryAssetDir, `${record.id}-source.png`),
+      path.join(libraryAssetDir, `${record.id}-garment.png`),
+    );
+    if (typeof record.image === "string") {
+      const filename = path.basename(record.image.split("?")[0]);
+      if (filename) candidates.push(path.join(libraryAssetDir, filename));
+    }
+    for (const candidate of candidates) {
+      try {
+        return await readFile(candidate);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    throw Object.assign(new Error("No source image is available to regenerate this garment."), { status: 409 });
+  }
+
+  async function generateGarmentImageBytes(record, direction) {
+    const key = setting("OPENAI_API_KEY");
+    if (!key) throw new Error("OPENAI_API_KEY is not configured");
+    const sourceData = await resolveGarmentSource(record);
+    const source = { data: sourceData, mime: "image/png", name: "source.png" };
+    const chromaKeyUsed = chooseChromaKey(record.color);
+    const basePrompt = options.garmentPrompt || buildGarmentPrompt(record, chromaKeyUsed);
+    const prompt = direction ? `${basePrompt}\nUser regeneration direction: ${direction}` : basePrompt;
+    const { bytes: rawBytes, cost } = await openAIEdit({
+      key,
+      baseUrl: apiBaseUrl(),
+      model: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")),
+      quality: setting("OPENAI_IMAGE_QUALITY", "medium"),
+      size: "1024x1024",
+      images: [source],
+      prompt,
+    });
+    const bytes = await removeChromaBackground(rawBytes, chromaKeyUsed);
+    return { bytes, cost };
+  }
+
+  function generateGarmentForWardrobeItem(id, direction) {
+    const lock = `wardrobe:${id}:garment`;
+    if (running.has(lock)) return running.get(lock);
+    const task = (async () => {
+      try {
+        const records = await loadImported();
+        const record = records.find((item) => item.id === id);
+        if (!record) return;
+        const { bytes, cost } = await generateGarmentImageBytes(record, direction);
+        const assetName = `${id}-garment.png`;
+        await writeFile(path.join(libraryAssetDir, assetName), bytes);
+        const image = `${LIBRARY_ASSET_ROOT}/${assetName}?v=${Date.now()}`;
+        await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          image,
+          thumbnail: image,
+          garmentGeneration: null,
+          costs: {
+            ...(current.costs || {}),
+            ...(cost ? { garment: cost } : {}),
+          },
+        }));
+      } catch (error) {
+        await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          garmentGeneration: {
+            status: "failed",
+            error: error.message,
+            startedAt: current.garmentGeneration?.startedAt || new Date().toISOString(),
+          },
+        })).catch(() => {});
+        await logCaughtError(error, {
+          source: "garment",
+          title: "Garment regenerate failed",
+          context: { wardrobeItemId: id },
+          dedupeKey: `garment:${id}`,
+        }).catch(() => {});
+      }
+    })().finally(() => running.delete(lock));
+    running.set(lock, task);
+    return task;
   }
 
   async function generateModeledImageBytes(record, direction) {
@@ -846,10 +943,12 @@ export function wardrobeImportApi(options = {}) {
         for (const garmentId of garmentIds) {
           const record = records.find((item) => item.id === garmentId);
           if (!record) return json(res, 404, { error: `Wardrobe item not found: ${garmentId}` });
-          if (seenParts.has(record.part)) {
-            return json(res, 400, { error: `Only one ${PART_LABEL[record.part] || "item"} can be added.` });
+          if (record.part !== "accessories_up") {
+            if (seenParts.has(record.part)) {
+              return json(res, 400, { error: `Only one ${PART_LABEL[record.part] || "item"} can be added.` });
+            }
+            seenParts.add(record.part);
           }
-          seenParts.add(record.part);
           garments.push(record);
         }
         for (const garment of garments) {
@@ -924,8 +1023,33 @@ export function wardrobeImportApi(options = {}) {
         await Promise.all([
           rm(path.join(libraryAssetDir, `${id}-garment.png`), { force: true }),
           rm(path.join(libraryAssetDir, `${id}-modeled.png`), { force: true }),
+          rm(path.join(libraryAssetDir, `${id}-source.png`), { force: true }),
         ]);
         return json(res, 200, { deleted: true, id });
+      }
+      const wardrobeGarmentMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})\/garment$/i);
+      if (wardrobeGarmentMatch && req.method === "POST") {
+        const id = wardrobeGarmentMatch[1];
+        const setup = await setupStatus();
+        if (!setup.ready) {
+          const missing = [
+            !setup.hasApiKey && "OPENAI_API_KEY in .env",
+            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+          ].filter(Boolean).join(" and ");
+          return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
+        }
+        const records = await loadImported();
+        const record = records.find((item) => item.id === id);
+        if (!record) return json(res, 404, { error: "Wardrobe item not found" });
+        if (record.garmentGeneration?.status === "processing") return json(res, 202, record);
+        const input = await body(req);
+        const direction = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) : "";
+        const marked = await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          garmentGeneration: { status: "processing", error: null, startedAt: new Date().toISOString() },
+        }));
+        void generateGarmentForWardrobeItem(id, direction);
+        return json(res, 202, marked);
       }
       const wardrobeModeledMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})\/modeled$/i);
       if (wardrobeModeledMatch && req.method === "POST") {

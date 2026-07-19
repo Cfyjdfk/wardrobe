@@ -78,8 +78,8 @@ Write `$WORK/manifest.json` using this final shape:
 
 Use only these `part` values:
 
-- `upperbody` — tops
-- `wholebody_up` — jackets and outerwear
+- `upperbody` — inner/main tops only (t-shirts, shirts, polos, blouses, thin base-layer sweaters)
+- `wholebody_up` — outer layers worn over a top (jackets, coats, blazers, zip-up fleeces, windbreakers, outerwear overshirts). Never use `upperbody` for these.
 - `lowerbody` — bottoms
 - `accessories_up` — accessories
 - `shoes` — shoes
