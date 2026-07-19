@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
@@ -8,10 +8,10 @@ import { OptimizedImage } from "./OptimizedImage.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
+const AUTOSAVE_MS = 1000;
 const GARMENT_DRAG_MIME = "application/x-wardrobe-garment";
 
-const TYPES = [
-  { id: "all", label: "All" },
+const PART_TYPES = [
   { id: "upperbody", label: "Tops", singular: "Top" },
   { id: "wholebody_up", label: "Jackets", singular: "Jacket" },
   { id: "lowerbody", label: "Bottoms", singular: "Bottom" },
@@ -19,8 +19,14 @@ const TYPES = [
   { id: "shoes", label: "Shoes", singular: "Shoes" },
 ];
 
+const TYPES = [
+  { id: "all", label: "All" },
+  ...PART_TYPES,
+  { id: "not_owned", label: "Not owned", icon: "bookmark" },
+];
+
 const TYPE_MAP = Object.fromEntries(TYPES.map((type) => [type.id, type]));
-const TYPE_ORDER = Object.fromEntries(TYPES.slice(1).map((type, index) => [type.id, index]));
+const TYPE_ORDER = Object.fromEntries(PART_TYPES.map((type, index) => [type.id, index]));
 
 const GARMENT_FUSE_OPTIONS = {
   keys: [
@@ -178,6 +184,10 @@ function readEdits() {
 }
 
 
+function isOwned(item) {
+  return item?.owned !== false;
+}
+
 function persistEdit(item) {
   const edits = readEdits();
   edits[item.id] = {
@@ -186,6 +196,7 @@ function persistEdit(item) {
     color: item.color || null,
     secondaryColor: item.secondaryColor || null,
     tags: item.tags || [],
+    owned: isOwned(item),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
 }
@@ -320,15 +331,18 @@ function GallerySkeleton({ count = GALLERY_SKELETON_COUNT }) {
   );
 }
 
-const GalleryItem = memo(function GalleryItem({ item, selected, onOpen }) {
+const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen }) {
   const type = TYPE_MAP[item.part]?.singular || "wardrobe item";
+  const owned = isOwned(item);
   const dragMoved = useRef(false);
 
   return (
     <button
-      className={`gallery-item${selected ? " selected" : ""}`}
+      className={`gallery-item${selected ? " selected" : ""}${owned ? "" : " is-not-owned"}`}
       type="button"
-      draggable
+      hidden={hidden}
+      tabIndex={hidden ? -1 : undefined}
+      draggable={!hidden}
       onDragStart={(event) => {
         dragMoved.current = false;
         event.dataTransfer.setData(GARMENT_DRAG_MIME, item.id);
@@ -350,7 +364,7 @@ const GalleryItem = memo(function GalleryItem({ item, selected, onOpen }) {
         }
         onOpen(item.id);
       }}
-      aria-label={`View ${item.name || type}`}
+      aria-label={`View ${item.name || type}${owned ? "" : ", not owned"}`}
       aria-pressed={selected}
       data-testid={`wardrobe-item-${item.id}`}
     >
@@ -360,6 +374,11 @@ const GalleryItem = memo(function GalleryItem({ item, selected, onOpen }) {
         sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 180px"
         breakpoints={[120, 180, 240, 320, 480]}
       />
+      {!owned && (
+        <span className="gallery-item-owned" title="Not owned" aria-hidden="true">
+          <BookmarkSimple size={13} weight="fill" />
+        </span>
+      )}
     </button>
   );
 });
@@ -568,25 +587,39 @@ const GarmentsPanel = memo(function GarmentsPanel({
   loading,
   error,
   itemsLength,
-  visibleItems,
+  galleryItems,
+  visibleItemIds,
+  visibleCount,
   selectedId,
   onOpen,
   activeType,
+  searching,
 }) {
+  const emptyFilterMessage = (() => {
+    if (searching) return "No garments match this search.";
+    if (activeType === "not_owned") return "No unowned garments.";
+    return "No garments in this category.";
+  })();
+
   return (
     <>
       {!error && loading && <GallerySkeleton />}
       {!error && !loading && !itemsLength && <p className="status empty">Drop, paste, or add a photo to import your first piece.</p>}
-      {!error && !loading && !!itemsLength && !visibleItems.length && (
-        <p className="status empty">No garments match this search.</p>
+      {!error && !loading && !!itemsLength && !visibleCount && (
+        <p className="status empty">{emptyFilterMessage}</p>
       )}
-      {!loading && !!visibleItems.length && (
-        <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}>
-          {visibleItems.map((item) => (
+      {!loading && !!galleryItems.length && (
+        <section
+          className="gallery-grid"
+          aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}
+          hidden={!visibleCount}
+        >
+          {galleryItems.map((item) => (
             <GalleryItem
               key={item.id}
               item={item}
               selected={selectedId === item.id}
+              hidden={!visibleItemIds.has(item.id)}
               onOpen={onOpen}
             />
           ))}
@@ -625,12 +658,9 @@ const OutfitsPanel = memo(function OutfitsPanel({
 
 function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext }) {
   const closeButtonRef = useRef(null);
-  const shakeTimerRef = useRef(null);
   const [name, setName] = useState(outfit.name || "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [shaking, setShaking] = useState(false);
-  const [closeBlocked, setCloseBlocked] = useState(false);
   const [zoomImage, setZoomImage] = useState(null);
   const hasImage = outfit.status === "ready" && Boolean(outfit.image);
   const orderedGarments = sortByPart(garments);
@@ -639,7 +669,6 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   useEffect(() => {
     setName(outfit.name || "");
     setSaveError("");
-    setCloseBlocked(false);
     setZoomImage((current) => {
       if (!current) return null;
       if (outfit.status === "ready" && outfit.image) {
@@ -649,42 +678,60 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     });
   }, [outfit.id]);
 
-  const nudgeUnsaved = useCallback(() => {
-    setCloseBlocked(true);
-    setShaking(false);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => setShaking(true));
-    });
-    clearTimeout(shakeTimerRef.current);
-    shakeTimerRef.current = setTimeout(() => setShaking(false), 420);
-  }, []);
+  const persistName = useCallback(async () => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setSaveError("Outfit name cannot be empty.");
+      setName(outfit.name || "");
+      return false;
+    }
+    if (nextName === (outfit.name || "").trim()) return true;
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onSave(outfit.id, nextName);
+      return true;
+    } catch (error) {
+      setSaveError(error.message || "Could not save the outfit name.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [name, onSave, outfit.id, outfit.name]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const timer = setTimeout(() => {
+      void persistName();
+    }, AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [isDirty, name, persistName]);
+
+  const flushAndRun = useCallback(async (action) => {
+    if (isDirty) await persistName();
+    action?.();
+  }, [isDirty, persistName]);
 
   const requestClose = useCallback(() => {
-    if (isDirty) nudgeUnsaved();
-    else onClose();
-  }, [isDirty, nudgeUnsaved, onClose]);
+    void flushAndRun(onClose);
+  }, [flushAndRun, onClose]);
 
   const requestNavigate = useCallback((delta) => {
     if (!onNavigate) return;
     if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
-    if (isDirty) nudgeUnsaved();
-    else onNavigate(delta);
-  }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
+    void flushAndRun(() => onNavigate(delta));
+  }, [canNext, canPrev, flushAndRun, onNavigate]);
 
   useEffect(() => {
     const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
-    return () => {
-      unlock();
-      clearTimeout(shakeTimerRef.current);
-    };
+    return unlock;
   }, [outfit.id]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
       if (zoomImage) return;
       if (event.key === "Escape") {
-        if (isTypingTarget(event.target) && isDirty) return;
         if (isTypingTarget(event.target)) {
           event.target.blur();
           return;
@@ -700,39 +747,13 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isDirty, requestClose, requestNavigate, zoomImage]);
-
-  const cancelEditing = () => {
-    setName(outfit.name || "");
-    setSaveError("");
-    setCloseBlocked(false);
-    onClose();
-  };
-
-  const saveEditing = async () => {
-    const nextName = name.trim();
-    if (!nextName) {
-      setSaveError("Outfit name cannot be empty.");
-      return;
-    }
-    if (!isDirty) return;
-    setSaving(true);
-    setSaveError("");
-    try {
-      await onSave(outfit.id, nextName);
-      setCloseBlocked(false);
-    } catch (error) {
-      setSaveError(error.message || "Could not save the outfit name.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  }, [requestClose, requestNavigate, zoomImage]);
 
   return (
     <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
       <div className="viewer-entry">
         <aside
-          className={`viewer editing${hasImage ? " has-modeled-image has-outfit-image" : ""}${shaking ? " shake" : ""}`}
+          className={`viewer editing${hasImage ? " has-modeled-image has-outfit-image" : ""}`}
           role="dialog"
           aria-modal="true"
           aria-label="Selected outfit"
@@ -813,8 +834,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
                         className="outfit-viewer-garment"
                         role="listitem"
                         onClick={() => {
-                          if (isDirty) nudgeUnsaved();
-                          else onOpenGarment(item.id);
+                          void flushAndRun(() => onOpenGarment(item.id));
                         }}
                         aria-label={`View ${item.name || type}`}
                       >
@@ -840,17 +860,12 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
               )}
             </div>
 
-            {closeBlocked && isDirty && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
             {saveError && <p className="outfit-viewer-error" role="alert">{saveError}</p>}
+            {saving && !saveError && <p className="autosave-notice" role="status">Saving…</p>}
 
             <div className="viewer-actions">
               <button className="delete-button" type="button" onClick={() => onDelete(outfit.id)}>
                 <Trash size={15} weight="regular" aria-hidden="true" /> Delete
-              </button>
-              <span className="action-spacer" />
-              <button className="secondary-button" type="button" onClick={cancelEditing}>Cancel</button>
-              <button className="primary-button" type="button" onClick={saveEditing} disabled={!isDirty || saving}>
-                <Check size={15} weight="bold" aria-hidden="true" /> {saving ? "Saving" : "Save"}
               </button>
             </div>
           </div>
@@ -979,6 +994,21 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
 
   return (
     <div className="item-editor">
+      <label className="ownership-toggle">
+        <input
+          type="checkbox"
+          checked={!draft.owned}
+          onChange={(event) => setDraft((current) => ({ ...current, owned: !event.target.checked }))}
+        />
+        <span className="ownership-toggle__mark" aria-hidden="true">
+          <BookmarkSimple size={14} weight={draft.owned ? "regular" : "fill"} />
+        </span>
+        <span className="ownership-toggle__copy">
+          <span className="ownership-toggle__title">Not owned</span>
+          <span className="ownership-toggle__hint">Mark pieces you want but don’t have yet</span>
+        </span>
+      </label>
+
       <label className="field">
         <span>Name</span>
         <input
@@ -991,7 +1021,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
       <label className="field">
         <span>Category</span>
         <select value={draft.part} onChange={(event) => setDraft((current) => ({ ...current, part: event.target.value }))}>
-          {TYPES.slice(1).map((type) => <option value={type.id} key={type.id}>{type.label}</option>)}
+          {PART_TYPES.map((type) => <option value={type.id} key={type.id}>{type.label}</option>)}
         </select>
       </label>
 
@@ -1035,13 +1065,10 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
-  const shakeTimerRef = useRef(null);
   const [sampling, setSampling] = useState(null);
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
-  const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
-  const [shaking, setShaking] = useState(false);
-  const [closeBlocked, setCloseBlocked] = useState(false);
+  const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
   const [refreshingGeneration, setRefreshingGeneration] = useState(false);
   const [confirmKind, setConfirmKind] = useState(null);
   const [regenPrompt, setRegenPrompt] = useState("");
@@ -1068,50 +1095,59 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       color: draft.color?.toLowerCase() || null,
       secondaryColor: draft.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(draft.tags),
+      owned: draft.owned !== false,
     }) !== JSON.stringify({
       name: (item.name || "").trim(),
       part: item.part,
       color: item.color?.toLowerCase() || null,
       secondaryColor: item.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(item.tags || []),
+      owned: isOwned(item),
     });
   }, [draft, item]);
 
-  const nudgeUnsaved = useCallback(() => {
-    setCloseBlocked(true);
-    setShaking(false);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => setShaking(true));
+  const persistDraft = useCallback(() => {
+    onSave({
+      ...item,
+      ...draft,
+      name: draft.name.trim(),
+      tags: draft.tags.map((tag) => tag.trim()).filter(Boolean),
+      owned: draft.owned !== false,
     });
-    clearTimeout(shakeTimerRef.current);
-    shakeTimerRef.current = setTimeout(() => setShaking(false), 420);
-  }, []);
+  }, [draft, item, onSave]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const timer = setTimeout(() => {
+      persistDraft();
+    }, AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, isDirty, persistDraft]);
+
+  const flushAndRun = useCallback((action) => {
+    if (isDirty) persistDraft();
+    action?.();
+  }, [isDirty, persistDraft]);
 
   const requestClose = useCallback(() => {
-    if (isDirty) nudgeUnsaved();
-    else onClose();
-  }, [isDirty, nudgeUnsaved, onClose]);
+    flushAndRun(onClose);
+  }, [flushAndRun, onClose]);
 
   const requestBack = useCallback(() => {
     if (!onBackToOutfit) return;
-    if (isDirty) nudgeUnsaved();
-    else onBackToOutfit();
-  }, [isDirty, nudgeUnsaved, onBackToOutfit]);
+    flushAndRun(onBackToOutfit);
+  }, [flushAndRun, onBackToOutfit]);
 
   const requestNavigate = useCallback((delta) => {
     if (!onNavigate) return;
     if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
-    if (isDirty) nudgeUnsaved();
-    else onNavigate(delta);
-  }, [canNext, canPrev, isDirty, nudgeUnsaved, onNavigate]);
+    flushAndRun(() => onNavigate(delta));
+  }, [canNext, canPrev, flushAndRun, onNavigate]);
 
   useEffect(() => {
     const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
-    return () => {
-      unlock();
-      clearTimeout(shakeTimerRef.current);
-    };
+    return unlock;
   }, [item.id]);
 
   useEffect(() => {
@@ -1142,11 +1178,10 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
     setRefreshingGeneration(false);
     setConfirmKind(null);
     setRegenPrompt("");
-    setCloseBlocked(false);
     setZoomImage((current) => {
       if (!current) return null;
       const nextType = TYPE_MAP[item.part]?.singular || "Wardrobe item";
@@ -1246,19 +1281,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     }
   };
 
-  const cancelEditing = () => {
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
-    setSampling(null);
-    setSampleStatus("");
-    onClose();
-  };
-
-  const saveEditing = () => {
-    onSave({ ...item, ...draft, name: draft.name.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
-    setSampling(null);
-    setSampleStatus("Changes saved.");
-  };
-
   const handleImageLoad = (event) => {
     samplingCanvasRef.current = buildSamplingCanvas(event.currentTarget);
     const extracted = extractPalette(event.currentTarget);
@@ -1305,7 +1327,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   return (
     <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
     <div className="viewer-entry">
-    <aside className={`viewer editing${hasModeledImage ? " has-modeled-image" : ""}${shaking ? " shake" : ""}`} role="dialog" aria-modal="true" aria-label="Selected wardrobe item">
+    <aside className={`viewer editing${hasModeledImage ? " has-modeled-image" : ""}`} role="dialog" aria-modal="true" aria-label="Selected wardrobe item">
       {onBackToOutfit && (
         <button className="viewer-back-button" type="button" onClick={requestBack}>
           <ArrowLeft size={16} weight="bold" aria-hidden="true" />
@@ -1462,16 +1484,9 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
           sampleStatus={sampleStatus}
         />
 
-        {closeBlocked && isDirty && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
-
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
             <Trash size={15} weight="regular" aria-hidden="true" /> Delete
-          </button>
-          <span className="action-spacer" />
-          <button className="secondary-button" type="button" onClick={cancelEditing}>Cancel</button>
-          <button className="primary-button" type="button" onClick={saveEditing}>
-            <Check size={15} weight="bold" aria-hidden="true" /> Save
           </button>
         </div>
       </div>
@@ -1674,25 +1689,39 @@ export function App() {
     return new Fuse(docs, OUTFIT_FUSE_OPTIONS);
   }, [itemsById, outfits]);
 
+  const sortedGalleryItems = useMemo(() => (
+    [...items].sort((a, b) => {
+      const typeDifference = (TYPE_ORDER[a.part] ?? 99) - (TYPE_ORDER[b.part] ?? 99);
+      if (typeDifference) return typeDifference;
+      return a.id.localeCompare(b.id);
+    })
+  ), [items]);
+
   const visibleItems = useMemo(() => {
-    const matchesType = (item) => activeType === "all" || item.part === activeType;
+    const matchesFilter = (item) => {
+      if (activeType === "all") return true;
+      if (activeType === "not_owned") return !isOwned(item);
+      return item.part === activeType;
+    };
 
     if (deferredSearchQuery) {
       return garmentFuse
         .search(deferredSearchQuery)
         .map((result) => itemsById.get(result.item.id))
-        .filter((item) => item && matchesType(item));
+        .filter((item) => item && matchesFilter(item));
     }
 
-    const filtered = items.filter(matchesType);
-    return [...filtered].sort((a, b) => {
-      if (activeType === "all") {
-        const typeDifference = (TYPE_ORDER[a.part] ?? 99) - (TYPE_ORDER[b.part] ?? 99);
-        if (typeDifference) return typeDifference;
-      }
-      return a.id.localeCompare(b.id);
-    });
-  }, [activeType, deferredSearchQuery, garmentFuse, items, itemsById]);
+    return sortedGalleryItems.filter(matchesFilter);
+  }, [activeType, deferredSearchQuery, garmentFuse, itemsById, sortedGalleryItems]);
+
+  const visibleItemIds = useMemo(
+    () => new Set(visibleItems.map((item) => item.id)),
+    [visibleItems],
+  );
+
+  // Keep the full sorted grid mounted while browsing filters so switching back to
+  // All does not remount images. Search uses the ranked subset instead.
+  const galleryItems = deferredSearchQuery ? visibleItems : sortedGalleryItems;
 
   const visibleOutfits = useMemo(() => {
     if (deferredSearchQuery) {
@@ -2001,7 +2030,7 @@ export function App() {
           </div>
           <nav
             className="category-nav"
-            aria-label="Filter wardrobe by item type"
+            aria-label="Filter wardrobe"
             aria-disabled={loading || undefined}
             hidden={libraryTab !== "garments"}
           >
@@ -2009,13 +2038,19 @@ export function App() {
               <button
                 key={type.id}
                 type="button"
-                className={activeType === type.id ? "active" : ""}
+                className={`${activeType === type.id ? "active" : ""}${type.icon ? " category-nav-icon" : ""}`}
                 onClick={() => chooseType(type.id)}
                 aria-pressed={activeType === type.id}
+                aria-label={type.label}
                 disabled={loading}
                 tabIndex={libraryTab === "garments" ? undefined : -1}
+                title={type.label}
               >
-                {type.label}
+                {type.icon === "bookmark" ? (
+                  <BookmarkSimple size={15} weight={activeType === type.id ? "fill" : "regular"} aria-hidden="true" />
+                ) : (
+                  type.label
+                )}
               </button>
             ))}
           </nav>
@@ -2028,10 +2063,13 @@ export function App() {
             loading={loading}
             error={error}
             itemsLength={items.length}
-            visibleItems={visibleItems}
+            galleryItems={galleryItems}
+            visibleItemIds={visibleItemIds}
+            visibleCount={visibleItems.length}
             selectedId={selectedId}
             onOpen={openItem}
             activeType={activeType}
+            searching={Boolean(deferredSearchQuery)}
           />
         </div>
 

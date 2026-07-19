@@ -888,6 +888,15 @@ button { font: inherit; }
   pointer-events: none;
 }
 
+.category-nav button.category-nav-icon {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  padding-inline: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
@@ -917,6 +926,7 @@ button { font: inherit; }
 }
 
 .gallery-item {
+  position: relative;
   appearance: none;
   width: 100%;
   aspect-ratio: .78;
@@ -929,6 +939,12 @@ button { font: inherit; }
   background: var(--paper);
   cursor: zoom-in;
   transition: border-color 160ms ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
+
+.gallery-item[hidden] {
+  display: none !important;
 }
 
 .gallery-item img {
@@ -948,6 +964,17 @@ button { font: inherit; }
 .gallery-item:focus-visible {
   outline: 1px solid var(--ink);
   outline-offset: 3px;
+}
+
+.gallery-item-owned {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  pointer-events: none;
 }
 
 .status {
@@ -1653,6 +1680,15 @@ button.modeled-hero-zoom {
   text-align: right;
 }
 
+.autosave-notice {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
 .viewer-text-close {
   border: 0;
   border-bottom: 1px solid var(--accent);
@@ -1716,6 +1752,65 @@ button.modeled-hero-zoom {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px 14px;
+}
+
+.ownership-toggle {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--paper) 92%, #fff);
+  cursor: pointer;
+}
+
+.ownership-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ownership-toggle__mark {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.ownership-toggle:has(input:checked) {
+  border-color: rgba(25, 25, 25, 0.22);
+  background: color-mix(in srgb, var(--paper) 82%, var(--ink));
+}
+
+.ownership-toggle:has(input:checked) .ownership-toggle__mark {
+  color: var(--ink);
+}
+
+.ownership-toggle__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ownership-toggle__title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 520;
+  letter-spacing: 0.01em;
+}
+
+.ownership-toggle__hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ownership-toggle:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .field,

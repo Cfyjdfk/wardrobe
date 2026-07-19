@@ -497,7 +497,6 @@ export function WardrobeImportFlow({
     : null;
   const readyCount = jobs.filter((job) => deriveStatus(job).tone === "ready").length;
   const importProcessingCount = jobs.filter((job) => deriveStatus(job).tone === "processing").length;
-  const loadingCount = backgroundCount + importProcessingCount;
   const selectedReviewJob = jobs.find((job) => job.id === selectedReviewId && (reviewStageFor(job) || hasCleanupFailure(job)));
   const reviewJob = selectedReviewJob || jobs.find((job) => reviewStageFor(job)) || jobs.find((job) => hasCleanupFailure(job)) || active;
   const reviewStage = reviewJob ? reviewStageFor(reviewJob) : null;
@@ -515,6 +514,24 @@ export function WardrobeImportFlow({
       || backgroundStatus
       || completionStatus
       || importStatus;
+  const trayLoadingText = (() => {
+    if (activeStatus?.tone !== "processing") return null;
+    const parts = [];
+    if (outfitCount) parts.push(outfitCount === 1 ? "1 outfit" : `${outfitCount} outfits`);
+    if (regeneratingGarmentCount) parts.push(regeneratingGarmentCount === 1 ? "1 garment" : `${regeneratingGarmentCount} garments`);
+    if (regeneratingModeledCount) parts.push(regeneratingModeledCount === 1 ? "1 modeled photo" : `${regeneratingModeledCount} modeled photos`);
+    if (importProcessingCount) parts.push(importProcessingCount === 1 ? "1 piece" : `${importProcessingCount} pieces`);
+    if (!parts.length) return activeStatus.text || "Generating";
+    if (!backgroundCount && importProcessingCount) {
+      return importProcessingCount === 1 ? "Preparing 1 piece" : `Preparing ${importProcessingCount} pieces`;
+    }
+    if (parts.length === 1 && !importProcessingCount) {
+      if (outfitCount) return outfitCount === 1 ? "Generating outfit" : `Generating ${outfitCount} outfits`;
+      if (regeneratingGarmentCount) return regeneratingGarmentCount === 1 ? "Regenerating garment" : `Regenerating ${regeneratingGarmentCount} garments`;
+      if (regeneratingModeledCount) return regeneratingModeledCount === 1 ? "Generating modeled photo" : `Generating ${regeneratingModeledCount} modeled photos`;
+    }
+    return `Generating ${parts.join(" · ")}`;
+  })();
   const showProcessingBar = activeStatus?.tone === "processing";
   const mixedBackground = Boolean((jobs.length && backgroundCount) || (outfitCount && wardrobeRegenCount));
   const popoverTitle = readyCount
@@ -698,8 +715,8 @@ export function WardrobeImportFlow({
                 ? "Open setup instructions"
                 : hasCompletionBadge
                   ? `${completionMessage || "Generation ready"}. Open results`
-                  : activeStatus?.tone === "processing" && loadingCount > 0
-                    ? `${activeStatus.text || "Generating"}. ${loadingCount} in progress. Open activity`
+                  : trayLoadingText
+                    ? `${trayLoadingText}. Open activity`
                     : "Open wardrobe activity"
             }
           >
@@ -721,15 +738,10 @@ export function WardrobeImportFlow({
               ) : (
                 <WarningCircle size={19} />
               )}
-              {activeStatus?.tone === "processing" && loadingCount > 0 && (
-                <span className="import-tray__badge" aria-hidden="true">
-                  {loadingCount > 9 ? "9+" : loadingCount}
-                </span>
-              )}
             </span>
             <span className="import-tray__actions">
               {active && <img className="import-tray__preview" src={active.stages?.garment?.assetUrl || active.stages?.garment?.failedAssetUrl || active.stages?.crop?.assetUrl || active.originalAssetUrl} alt="" />}
-              <span className="import-tray__label">{activeStatus?.text || "Activity"}</span>
+              <span className="import-tray__label">{trayLoadingText || activeStatus?.text || "Activity"}</span>
             </span>
           </button>
         ) : null}
