@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 
-function arrowNavigationDelta(key) {
-  if (key === "ArrowLeft" || key === "ArrowUp") return -1;
-  if (key === "ArrowRight" || key === "ArrowDown") return 1;
+function arrowNavigationDelta(key, columnCount = 1) {
+  const columns = Math.max(1, Math.floor(columnCount) || 1);
+  if (key === "ArrowLeft") return -1;
+  if (key === "ArrowRight") return 1;
+  if (key === "ArrowUp") return -columns;
+  if (key === "ArrowDown") return columns;
   return 0;
 }
 
@@ -40,6 +43,7 @@ export function ImageZoomLightbox({
   onNavigate,
   canPrev = false,
   canNext = false,
+  gridColumns = 1,
   label = "item",
   className = "",
 }) {
@@ -64,7 +68,7 @@ export function ImageZoomLightbox({
         onClose();
         return;
       }
-      const delta = arrowNavigationDelta(event.key);
+      const delta = arrowNavigationDelta(event.key, gridColumns);
       if (!delta || !onNavigate) return;
       event.preventDefault();
       event.stopPropagation();
@@ -72,7 +76,7 @@ export function ImageZoomLightbox({
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, onNavigate]);
+  }, [gridColumns, onClose, onNavigate]);
 
   useLayoutEffect(() => {
     if (!zoomed || !pendingFocusRef.current || !scrollerRef.current || !frameRef.current) return;

@@ -109,10 +109,29 @@ function navigationBounds(ids, currentId) {
   return { canPrev: index > 0, canNext: index < ids.length - 1 };
 }
 
-function arrowNavigationDelta(key) {
-  if (key === "ArrowLeft" || key === "ArrowUp") return -1;
-  if (key === "ArrowRight" || key === "ArrowDown") return 1;
+function arrowNavigationDelta(key, columnCount = 1) {
+  const columns = Math.max(1, Math.floor(columnCount) || 1);
+  if (key === "ArrowLeft") return -1;
+  if (key === "ArrowRight") return 1;
+  if (key === "ArrowUp") return -columns;
+  if (key === "ArrowDown") return columns;
   return 0;
+}
+
+function measureGridColumnCount(selector) {
+  const grid = document.querySelector(selector);
+  if (!(grid instanceof HTMLElement)) return 1;
+  const items = Array.from(grid.children).filter(
+    (node) => node instanceof HTMLElement && !node.hidden && node.getAttribute("aria-hidden") !== "true",
+  );
+  if (items.length <= 1) return 1;
+  const firstTop = items[0].offsetTop;
+  let columns = 1;
+  for (let index = 1; index < items.length; index += 1) {
+    if (items[index].offsetTop !== firstTop) break;
+    columns += 1;
+  }
+  return Math.max(1, columns);
 }
 
 function lockBodyScroll() {
@@ -732,7 +751,7 @@ const OutfitsPanel = memo(function OutfitsPanel({
   );
 });
 
-function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext }) {
+function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext, gridColumns = 1 }) {
   const closeButtonRef = useRef(null);
   const [name, setName] = useState(outfit.name || "");
   const [tags, setTags] = useState(() => outfitDetailTags(outfit));
@@ -802,8 +821,11 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   }, [flushAndRun, onClose]);
 
   const requestNavigate = useCallback((delta) => {
-    if (!onNavigate) return;
-    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
+    if (!onNavigate || !delta) return;
+    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) {
+      // Horizontal buttons still use canPrev/canNext; vertical jumps may exceed ±1.
+      if (Math.abs(delta) === 1) return;
+    }
     void flushAndRun(() => onNavigate(delta));
   }, [canNext, canPrev, flushAndRun, onNavigate]);
 
@@ -825,14 +847,14 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
         return;
       }
       if (isTypingTarget(event.target)) return;
-      const delta = arrowNavigationDelta(event.key);
+      const delta = arrowNavigationDelta(event.key, gridColumns);
       if (!delta) return;
       event.preventDefault();
       requestNavigate(delta);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [requestClose, requestNavigate, zoomImage]);
+  }, [gridColumns, requestClose, requestNavigate, zoomImage]);
 
   return (
     <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
@@ -962,6 +984,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
           onNavigate={requestNavigate}
           canPrev={canPrev}
           canNext={canNext}
+          gridColumns={gridColumns}
           label="outfit"
         />
       )}
@@ -1146,7 +1169,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext }) {
+function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext, gridColumns = 1 }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -1233,8 +1256,10 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   }, [flushAndRun, onBackToOutfit]);
 
   const requestNavigate = useCallback((delta) => {
-    if (!onNavigate) return;
-    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) return;
+    if (!onNavigate || !delta) return;
+    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) {
+      if (Math.abs(delta) === 1) return;
+    }
     flushAndRun(() => onNavigate(delta));
   }, [canNext, canPrev, flushAndRun, onNavigate]);
 
@@ -1258,7 +1283,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
         return;
       }
       if (confirmKind) return;
-      const delta = arrowNavigationDelta(event.key);
+      const delta = arrowNavigationDelta(event.key, gridColumns);
       if (!delta) return;
       event.preventDefault();
       requestNavigate(delta);
@@ -1266,7 +1291,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [confirmKind, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
+  }, [confirmKind, gridColumns, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
 
   useEffect(() => {
     setSampling(null);
@@ -1569,6 +1594,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
           onNavigate={requestNavigate}
           canPrev={canPrev}
           canNext={canNext}
+          gridColumns={gridColumns}
           label="garment"
         />
       )}
@@ -1870,6 +1896,31 @@ export function App() {
     const nextId = adjacentId(browseableOutfitIds, selectedOutfitId, delta);
     if (nextId && nextId !== selectedOutfitId) setSelectedOutfitId(nextId);
   }, [browseableOutfitIds, selectedOutfitId]);
+
+  const [garmentGridColumns, setGarmentGridColumns] = useState(1);
+  const [outfitGridColumns, setOutfitGridColumns] = useState(1);
+
+  useEffect(() => {
+    const measure = () => {
+      setGarmentGridColumns(
+        returnOutfitId
+          ? 1
+          : measureGridColumnCount(".library-panel:not([hidden]) .gallery-grid"),
+      );
+      setOutfitGridColumns(measureGridColumnCount(".library-panel:not([hidden]) .outfits-grid"));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [
+    returnOutfitId,
+    garmentTileSize,
+    libraryTab,
+    visibleItems.length,
+    listedOutfits.length,
+    selectedId,
+    selectedOutfitId,
+  ]);
 
   const chooseType = (typeId) => {
     setActiveType(typeId);
@@ -2182,6 +2233,7 @@ export function App() {
           onNavigate={navigateItem}
           canPrev={itemNavBounds.canPrev}
           canNext={itemNavBounds.canNext}
+          gridColumns={garmentGridColumns}
         />
       )}
       {selectedOutfit && (
@@ -2195,6 +2247,7 @@ export function App() {
           onNavigate={navigateOutfit}
           canPrev={outfitNavBounds.canPrev}
           canNext={outfitNavBounds.canNext}
+          gridColumns={outfitGridColumns}
         />
       )}
       <WardrobeImportFlow
