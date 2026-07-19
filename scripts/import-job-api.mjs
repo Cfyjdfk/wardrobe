@@ -8,6 +8,8 @@ import {
   buildGarmentPrompt,
   buildModeledPrompt,
   buildOutfitPrompt,
+  buildOutfitSuggestPrompt,
+  ensureRequiredParts,
   outfitNameFromGarments,
   sortGarmentsByPart,
 } from "./prompts.mjs";
@@ -97,6 +99,23 @@ function normalizeMetadata(value = {}) {
     owned: metadata.owned !== false,
     boundingBox: normalizeBoundingBox(metadata.boundingBox),
   };
+}
+
+/** Merge a partial user edit onto an existing wardrobe record; unset fields keep their current value. */
+function normalizeWardrobePatch(existing, input = {}) {
+  const patch = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const next = { ...existing };
+  if (typeof patch.name === "string") {
+    const name = patch.name.trim().slice(0, 120);
+    if (name) next.name = name;
+  }
+  if (PARTS.has(patch.part)) next.part = patch.part;
+  if (typeof patch.color === "string" && HEX_COLOR.test(patch.color)) next.color = patch.color.toLowerCase();
+  if (patch.secondaryColor === null) next.secondaryColor = null;
+  else if (typeof patch.secondaryColor === "string" && HEX_COLOR.test(patch.secondaryColor)) next.secondaryColor = patch.secondaryColor.toLowerCase();
+  if (patch.tags !== undefined) next.tags = normalizeTags(patch.tags);
+  if (patch.owned !== undefined) next.owned = patch.owned !== false;
+  return next;
 }
 
 function normalizeBoundingBox(value = {}) {
@@ -321,12 +340,35 @@ const IMAGE_MODEL_RATES = {
   "gpt-image-1-mini": { textInput: 2, imageInput: 2.5, imageOutput: 8 },
 };
 
+/** Per-1M-token rates for Responses / chat text models used by outfit suggest. */
+const TEXT_MODEL_RATES = {
+  "gpt-5.4-mini": { input: 0.75, cachedInput: 0.075, output: 4.5 },
+  "gpt-5.4": { input: 2.5, cachedInput: 0.25, output: 15 },
+  "gpt-5.4-nano": { input: 0.2, cachedInput: 0.02, output: 1.25 },
+  "gpt-4.1-mini": { input: 0.4, cachedInput: 0.1, output: 1.6 },
+  "gpt-4.1-nano": { input: 0.1, cachedInput: 0.025, output: 0.4 },
+  "gpt-4o-mini": { input: 0.15, cachedInput: 0.075, output: 0.6 },
+};
+
 function ratesForImageModel(model) {
   if (IMAGE_MODEL_RATES[model]) return IMAGE_MODEL_RATES[model];
   if (typeof model === "string" && model.startsWith("gpt-image-1-mini")) return IMAGE_MODEL_RATES["gpt-image-1-mini"];
   if (typeof model === "string" && model.startsWith("gpt-image-1.5")) return IMAGE_MODEL_RATES["gpt-image-1.5"];
   if (typeof model === "string" && model.startsWith("gpt-image-1")) return IMAGE_MODEL_RATES["gpt-image-1"];
   return IMAGE_MODEL_RATES["gpt-image-2"];
+}
+
+function ratesForTextModel(model) {
+  if (TEXT_MODEL_RATES[model]) return TEXT_MODEL_RATES[model];
+  if (typeof model === "string") {
+    if (model.includes("5.4-nano")) return TEXT_MODEL_RATES["gpt-5.4-nano"];
+    if (model.includes("5.4-mini")) return TEXT_MODEL_RATES["gpt-5.4-mini"];
+    if (model.includes("5.4")) return TEXT_MODEL_RATES["gpt-5.4"];
+    if (model.includes("4.1-nano")) return TEXT_MODEL_RATES["gpt-4.1-nano"];
+    if (model.includes("4.1-mini")) return TEXT_MODEL_RATES["gpt-4.1-mini"];
+    if (model.includes("4o-mini")) return TEXT_MODEL_RATES["gpt-4o-mini"];
+  }
+  return TEXT_MODEL_RATES["gpt-5.4-mini"];
 }
 
 function buildGenerationCost(model, usage) {
@@ -348,6 +390,30 @@ function buildGenerationCost(model, usage) {
     totalTokens,
     textTokens: textTokens || null,
     imageTokens: imageTokens || null,
+    estimatedUsd: Number(estimatedUsd.toFixed(6)),
+    at: new Date().toISOString(),
+  };
+}
+
+function buildTextCost(model, usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const inputTokens = Number(usage.input_tokens) || 0;
+  const outputTokens = Number(usage.output_tokens) || 0;
+  const totalTokens = Number(usage.total_tokens) || (inputTokens + outputTokens);
+  const cachedTokens = Number(usage.input_tokens_details?.cached_tokens) || 0;
+  if (!inputTokens && !outputTokens && !totalTokens) return null;
+  const rates = ratesForTextModel(model);
+  const billedCached = Math.min(cachedTokens, inputTokens);
+  const billedInput = Math.max(0, inputTokens - billedCached);
+  const estimatedUsd = (billedInput * rates.input + billedCached * rates.cachedInput + outputTokens * rates.output) / 1_000_000;
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    textTokens: inputTokens || null,
+    imageTokens: null,
+    cachedTokens: billedCached || null,
     estimatedUsd: Number(estimatedUsd.toFixed(6)),
     at: new Date().toISOString(),
   };
@@ -404,6 +470,57 @@ async function openAIAnalyze({ key, baseUrl, model, image, mime }) {
   const parsed = JSON.parse(outputText);
   if (!Array.isArray(parsed.items)) throw new Error("OpenAI analysis returned an invalid clothing list");
   return parsed.items;
+}
+
+async function openAISuggestOutfit({ key, baseUrl, model, catalog, prompt }) {
+  const response = await fetch(`${baseUrl}/responses`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      input: [{ role: "user", content: [
+        { type: "input_text", text: buildOutfitSuggestPrompt(catalog, prompt) },
+      ] }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "outfit_suggestion",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              garmentIds: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 8 },
+              requiredParts: {
+                type: "array",
+                items: { type: "string", enum: [...PARTS] },
+                description: "Part ids explicitly named or clearly implied by the user's request (e.g. mentioning a jacket/coat means wholebody_up). Empty if the request doesn't name a specific part.",
+              },
+              name: { type: "string" },
+              reason: { type: "string" },
+            },
+            required: ["garmentIds", "requiredParts", "name", "reason"],
+          },
+        },
+      },
+    }),
+  });
+  const bodyText = await response.text();
+  let result = {};
+  try { result = bodyText ? JSON.parse(bodyText) : {}; }
+  catch { result = {}; }
+  if (!response.ok) throw openaiFailureError("suggestion", response.status, bodyText, result);
+  const outputText = result.output_text || result.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
+  if (!outputText) throw Object.assign(new Error("OpenAI outfit suggestion returned no structured result"), { detail: bodyText.slice(0, 2000) || null });
+  const parsed = JSON.parse(outputText);
+  if (!Array.isArray(parsed.garmentIds)) throw new Error("OpenAI outfit suggestion returned an invalid garment list");
+  return {
+    garmentIds: parsed.garmentIds,
+    requiredParts: Array.isArray(parsed.requiredParts) ? [...new Set(parsed.requiredParts.filter((part) => PARTS.has(part)))] : [],
+    name: typeof parsed.name === "string" ? parsed.name.trim() : "",
+    reason: typeof parsed.reason === "string" ? parsed.reason.trim() : "",
+    cost: buildTextCost(model, result.usage),
+  };
 }
 
 const ERROR_LOG_LIMIT = 100;
@@ -943,6 +1060,86 @@ export function wardrobeImportApi(options = {}) {
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
         return json(res, 200, outfits);
       }
+      if (url.pathname === "/api/import/outfits/suggest" && req.method === "POST") {
+        const setup = await setupStatus();
+        if (!setup.hasApiKey) {
+          return json(res, 503, { error: "Setup required: add OPENAI_API_KEY in .env, then restart the app." });
+        }
+        const input = await body(req, 64 * 1024);
+        const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 500) : "";
+        if (!prompt) {
+          return json(res, 400, { error: "Enter a styling prompt to suggest an outfit." });
+        }
+        const records = await loadImported();
+        // AI outfit picks are limited to pieces you own — wishlist / not-owned items stay out of the catalog.
+        const ownedRecords = records.filter((item) => item.owned !== false);
+        if (ownedRecords.length < 2) {
+          return json(res, 400, { error: "Add at least two owned garments to your wardrobe first." });
+        }
+        const catalog = ownedRecords.map((item) => ({
+          id: item.id,
+          name: item.name,
+          part: item.part,
+          color: item.color || null,
+          secondaryColor: item.secondaryColor || null,
+          palette: Array.isArray(item.palette) ? item.palette : [],
+          tags: Array.isArray(item.tags)
+            ? item.tags.filter((tag) => typeof tag === "string" && tag.trim()).map((tag) => tag.trim())
+            : [],
+        }));
+        const byId = new Map(ownedRecords.map((item) => [item.id, item]));
+
+        const key = setting("OPENAI_API_KEY");
+        const model = setting("OPENAI_VISION_MODEL", "gpt-5.4-mini");
+        const baseUrl = apiBaseUrl();
+        let suggestion;
+        try {
+          suggestion = await openAISuggestOutfit({ key, baseUrl, model, catalog, prompt });
+        } catch (error) {
+          return json(res, error.status || 502, { error: error.message || "Could not suggest an outfit." });
+        }
+        const requiredParts = suggestion.requiredParts.filter((part) =>
+          ownedRecords.some((item) => item.part === part),
+        );
+
+        const garmentIds = [...new Set(
+          (suggestion.garmentIds || [])
+            .filter((id) => typeof id === "string" && id.trim())
+            .map((id) => id.trim()),
+        )];
+        const garments = [];
+        const seenParts = new Set();
+        for (const garmentId of garmentIds) {
+          const record = byId.get(garmentId);
+          if (!record) {
+            // Skip unknown or not-owned ids the model may invent; do not fail the whole suggestion.
+            continue;
+          }
+          if (record.part !== "accessories_up") {
+            if (seenParts.has(record.part)) continue;
+            seenParts.add(record.part);
+          }
+          garments.push(record);
+        }
+        if (garments.length < 2) {
+          return json(res, 502, { error: "The model did not return enough owned garments for an outfit." });
+        }
+
+        // Safety net: if the model listed a required part but its own garmentIds omitted it, fill the gap deterministically.
+        const ordered = ensureRequiredParts(garments, requiredParts, ownedRecords, prompt);
+        const missingRequired = requiredParts.filter((part) => !ordered.some((item) => item.part === part));
+        if (missingRequired.length) {
+          const missingLabels = missingRequired.map((part) => PART_LABEL[part] || part).join(", ");
+          return json(res, 502, { error: `No ${missingLabels.toLowerCase()} available to complete that request.` });
+        }
+
+        return json(res, 200, {
+          garmentIds: ordered.map((item) => item.id),
+          name: (suggestion.name || outfitNameFromGarments(ordered)).slice(0, 120),
+          reason: (suggestion.reason || "").slice(0, 400),
+          ...(suggestion.cost ? { cost: suggestion.cost } : {}),
+        });
+      }
       if (url.pathname === "/api/import/outfits" && req.method === "POST") {
         const setup = await setupStatus();
         if (!setup.ready) {
@@ -1043,6 +1240,13 @@ export function wardrobeImportApi(options = {}) {
         const record = records.find((item) => item.id === wardrobeItemMatch[1]);
         if (!record) return json(res, 404, { error: "Wardrobe item not found" });
         return json(res, 200, record);
+      }
+      if (wardrobeItemMatch && (req.method === "PATCH" || req.method === "PUT")) {
+        const id = wardrobeItemMatch[1];
+        const input = await body(req);
+        const updated = await updateWardrobeRecord(id, (current) => normalizeWardrobePatch(current, input));
+        if (!updated) return json(res, 404, { error: "Wardrobe item not found" });
+        return json(res, 200, updated);
       }
       if (wardrobeItemMatch && req.method === "DELETE") {
         const id = wardrobeItemMatch[1];

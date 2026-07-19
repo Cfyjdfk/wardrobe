@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, MagnifyingGlass, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, MagicWand, MagnifyingGlass, PaperPlaneTilt, Plus, ShoppingBag, Sparkle, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
@@ -40,7 +40,7 @@ const PART_TYPES = [
 const TYPES = [
   { id: "all", label: "All" },
   ...PART_TYPES,
-  { id: "not_owned", label: "Not owned", icon: "bookmark" },
+  { id: "not_owned", label: "Not owned", icon: "shopping" },
 ];
 
 const TYPE_MAP = Object.fromEntries(TYPES.map((type) => [type.id, type]));
@@ -177,13 +177,13 @@ function tokenMetaEntries(costs, singleCost) {
   ].filter(Boolean);
 }
 
-function GenerationCostMeta({ costs, singleCost }) {
+function GenerationCostMeta({ costs, singleCost, showLabel = true }) {
   const entries = tokenMetaEntries(costs, singleCost);
   if (!entries.length) return null;
   const isOutfit = Boolean(singleCost);
   return (
     <p className="generation-cost" aria-label="Generation cost">
-      {isOutfit && <span className="generation-cost-label">Estimated cost</span>}
+      {isOutfit && showLabel && <span className="generation-cost-label">Estimated cost</span>}
       {entries.map((entry) => (
         <span className="generation-cost-item" key={entry.label || "outfit"} title={entry.title}>
           {entry.label && <span className="generation-cost-label">{entry.label}</span>}
@@ -398,6 +398,7 @@ const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen, 
     : tileSize === "small"
       ? [120, 160, 200, 280]
       : [140, 200, 280, 360, 480];
+  const ownedIconSize = tileSize === "large" ? 20 : tileSize === "small" ? 12 : 15;
 
   return (
     <button
@@ -438,8 +439,8 @@ const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen, 
         breakpoints={imageBreakpoints}
       />
       {!owned && (
-        <span className="gallery-item-owned" title="Not owned" aria-hidden="true">
-          <BookmarkSimple size={13} weight="fill" />
+        <span className={`gallery-item-owned gallery-item-owned--${tileSize}`} title="Not owned" aria-hidden="true">
+          <ShoppingBag size={ownedIconSize} weight="regular" />
         </span>
       )}
     </button>
@@ -498,12 +499,107 @@ function GallerySearch({ value, onChange, placeholder = "Search name or details"
   );
 }
 
-function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate }) {
+function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost = null }) {
+  const inputRef = useRef(null);
+  const wasLoading = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const trimmed = value.trim();
+  const expanded = open || !!trimmed || loading;
+  const canSend = !!trimmed && !loading && !disabled;
+
+  // After a generation finishes, always collapse back to the circular wand.
+  useEffect(() => {
+    if (wasLoading.current && !loading) {
+      setValue("");
+      setOpen(false);
+      inputRef.current?.blur();
+    }
+    wasLoading.current = loading;
+  }, [loading]);
+
+  const submit = () => {
+    if (!canSend) return;
+    const prompt = trimmed;
+    onSubmit(prompt, () => {
+      setValue("");
+      setOpen(false);
+    });
+  };
+
+  return (
+    <div className={`gallery-outfit-prompt${expanded ? " is-expanded" : ""}${loading ? " is-loading" : ""}`}>
+      <div className="gallery-outfit-prompt-bar">
+        <button
+          type="button"
+          className="gallery-outfit-prompt-toggle"
+          disabled={disabled || loading}
+          onClick={() => {
+            setOpen(true);
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }}
+          aria-label={expanded ? "AI outfit prompt" : "Open AI outfit prompt"}
+          aria-expanded={expanded}
+        >
+          <MagicWand size={17} weight="bold" aria-hidden="true" />
+        </button>
+        <div className="gallery-outfit-prompt-field">
+          <input
+            ref={inputRef}
+            type="text"
+            value={value}
+            disabled={disabled || loading}
+            onChange={(event) => setValue(event.target.value.slice(0, 500))}
+            onFocus={() => setOpen(true)}
+            onBlur={() => {
+              if (!trimmed && !loading) setOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submit();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setValue("");
+                setOpen(false);
+                inputRef.current?.blur();
+              }
+            }}
+            placeholder="Describe an outfit idea (e.g. 'smart summer brunch with sandals')"
+            aria-label="AI outfit prompt"
+            autoComplete="off"
+            spellCheck="false"
+            maxLength={500}
+          />
+          <button
+            type="button"
+            className="gallery-outfit-prompt-send"
+            disabled={!canSend}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={submit}
+            aria-label="Send outfit prompt"
+          >
+            <PaperPlaneTilt size={15} weight="fill" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      {cost && !expanded && (
+        <div className="gallery-outfit-prompt-cost">
+          <GenerationCostMeta singleCost={cost} showLabel={false} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate, suggesting = false }) {
   const [draggingOver, setDraggingOver] = useState(false);
   const ordered = sortByPart(items);
-  const canGenerate = ordered.length >= 2;
+  const canGenerate = ordered.length >= 2 && !suggesting;
 
   const acceptDrop = (event) => {
+    if (suggesting) return;
     event.preventDefault();
     event.stopPropagation();
     setDraggingOver(false);
@@ -514,14 +610,17 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
   return (
     <div className="outfit-composer-shell">
       <section
-        className={`outfit-composer${draggingOver ? " is-over" : ""}${ordered.length ? " has-items" : ""}`}
+        className={`outfit-composer${draggingOver ? " is-over" : ""}${ordered.length || suggesting ? " has-items" : ""}${suggesting ? " is-suggesting" : ""}`}
         aria-label="Outfit composer"
+        aria-busy={suggesting || undefined}
         onDragEnter={(event) => {
+          if (suggesting) return;
           if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
           event.preventDefault();
           setDraggingOver(true);
         }}
         onDragOver={(event) => {
+          if (suggesting) return;
           if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = "copy";
@@ -533,6 +632,11 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
         }}
         onDrop={acceptDrop}
       >
+        {suggesting && (
+          <div className="outfit-composer-suggesting" role="status" aria-label="Suggesting outfit">
+            <span className="outfit-composer-rainbow" aria-hidden="true" />
+          </div>
+        )}
         <div className="outfit-composer-main">
           <div className="outfit-composer-tray">
             {!ordered.length ? (
@@ -556,6 +660,7 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
                       <button
                         type="button"
                         className="outfit-composer-remove"
+                        disabled={suggesting}
                         onClick={() => onRemove(item.id)}
                         aria-label={`Remove ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
                       >
@@ -569,7 +674,7 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
           </div>
         </div>
 
-        {ordered.length > 0 && (
+        {ordered.length > 0 && !suggesting && (
           <div className="outfit-composer-actions">
             {ordered.length < 2 ? (
               <p className="outfit-composer-hint">Add at least one more garment</p>
@@ -1101,18 +1206,20 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
 
   return (
     <div className="item-editor">
-      <label className="ownership-toggle">
+      <label className="ownership-switch">
+        <span className="ownership-switch__copy">
+          <span className="ownership-switch__title">Not owned</span>
+          <span className="ownership-switch__hint">Mark pieces you want but don’t have yet</span>
+        </span>
         <input
           type="checkbox"
+          role="switch"
           checked={!draft.owned}
           onChange={(event) => setDraft((current) => ({ ...current, owned: !event.target.checked }))}
+          aria-label="Not owned"
         />
-        <span className="ownership-toggle__mark" aria-hidden="true">
-          <BookmarkSimple size={14} weight={draft.owned ? "regular" : "fill"} />
-        </span>
-        <span className="ownership-toggle__copy">
-          <span className="ownership-toggle__title">Not owned</span>
-          <span className="ownership-toggle__hint">Mark pieces you want but don’t have yet</span>
+        <span className="ownership-switch__track" aria-hidden="true">
+          <span className="ownership-switch__thumb" />
         </span>
       </label>
 
@@ -1179,6 +1286,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [confirmKind, setConfirmKind] = useState(null);
   const [regenPrompt, setRegenPrompt] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
+  const [saveError, setSaveError] = useState("");
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
   const modeledStatus = item.modeledGeneration?.status || null;
@@ -1219,37 +1327,43 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     });
   }, [draft, item]);
 
-  const persistDraft = useCallback(() => {
+  const persistDraft = useCallback(async () => {
     if (!mountedRef.current) return;
-    onSave({
-      ...item,
-      ...draft,
-      name: draft.name.trim(),
-      tags: draft.tags.map((tag) => tag.trim()).filter(Boolean),
-      owned: draft.owned !== false,
-    });
+    setSaveError("");
+    try {
+      await onSave({
+        ...item,
+        ...draft,
+        name: draft.name.trim(),
+        tags: draft.tags.map((tag) => tag.trim()).filter(Boolean),
+        owned: draft.owned !== false,
+      });
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setSaveError(error.message || "Could not save the garment.");
+    }
   }, [draft, item, onSave]);
 
   useEffect(() => {
     if (!isDirty) return undefined;
     const timer = setTimeout(() => {
-      persistDraft();
+      void persistDraft();
     }, AUTOSAVE_MS);
     return () => clearTimeout(timer);
   }, [draft, isDirty, persistDraft]);
 
-  const flushAndRun = useCallback((action) => {
-    if (isDirty) persistDraft();
+  const flushAndRun = useCallback(async (action) => {
+    if (isDirty) await persistDraft();
     action?.();
   }, [isDirty, persistDraft]);
 
   const requestClose = useCallback(() => {
-    flushAndRun(onClose);
+    void flushAndRun(onClose);
   }, [flushAndRun, onClose]);
 
   const requestBack = useCallback(() => {
     if (!onBackToOutfit) return;
-    flushAndRun(onBackToOutfit);
+    void flushAndRun(onBackToOutfit);
   }, [flushAndRun, onBackToOutfit]);
 
   const requestNavigate = useCallback((delta) => {
@@ -1257,7 +1371,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) {
       if (Math.abs(delta) === 1) return;
     }
-    flushAndRun(() => onNavigate(delta));
+    void flushAndRun(() => onNavigate(delta));
   }, [canNext, canPrev, flushAndRun, onNavigate]);
 
   useEffect(() => {
@@ -1554,6 +1668,8 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
           sampleStatus={sampleStatus}
         />
 
+        {saveError && <p className="outfit-viewer-error" role="alert">{saveError}</p>}
+
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
             <Trash size={15} weight="regular" aria-hidden="true" /> Delete
@@ -1591,6 +1707,8 @@ export function App() {
   const [composerItems, setComposerItems] = useState([]);
   const [composerPrompt, setComposerPrompt] = useState("");
   const [composerError, setComposerError] = useState("");
+  const [suggestingOutfit, setSuggestingOutfit] = useState(false);
+  const [suggestCost, setSuggestCost] = useState(null);
   const [outfits, setOutfits] = useState([]);
   const [selectedOutfitId, setSelectedOutfitId] = useState(null);
   const [returnOutfitId, setReturnOutfitId] = useState(null);
@@ -1964,10 +2082,29 @@ export function App() {
     setOutfits((current) => current.map((outfit) => (outfit.id === id ? { ...outfit, ...result } : outfit)));
   }, []);
 
-  const saveItem = (updatedItem) => {
+  const saveItem = useCallback(async (updatedItem) => {
     setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
+    // Write the edit to localStorage first so it survives even if the request below fails or the tab is offline.
     persistEdit(updatedItem);
-  };
+    if (!updatedItem.id.startsWith("import-")) return;
+    const response = await fetch(`/api/import/wardrobe/${updatedItem.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: updatedItem.name,
+        part: updatedItem.part,
+        color: updatedItem.color,
+        secondaryColor: updatedItem.secondaryColor,
+        tags: updatedItem.tags,
+        owned: isOwned(updatedItem),
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Could not save the garment.");
+    // Once library.json has the change, drop the local override so a fresh load can't get shadowed by stale edits.
+    removePersistedEdit(updatedItem.id);
+    setItems((current) => current.map((item) => item.id === result.id ? { ...item, ...result } : item));
+  }, []);
 
   const deleteItem = useCallback(async (id) => {
     if (id.startsWith("import-")) {
@@ -2075,6 +2212,51 @@ export function App() {
     setComposerItems((current) => current.filter((item) => item.id !== id));
   }, []);
 
+  const setComposerFromIds = useCallback((garmentIds) => {
+    const next = [];
+    const seenParts = new Set();
+    const seenIds = new Set();
+    for (const id of garmentIds) {
+      if (seenIds.has(id)) continue;
+      const item = items.find((entry) => entry.id === id);
+      if (!item) continue;
+      seenIds.add(id);
+      if (item.part !== "accessories_up") {
+        if (seenParts.has(item.part)) continue;
+        seenParts.add(item.part);
+      }
+      next.push(item);
+    }
+    setComposerItems(next);
+    setComposerPrompt("");
+    setComposerError("");
+  }, [items]);
+
+  const suggestOutfit = useCallback(async (prompt, onSuccess) => {
+    const trimmed = String(prompt || "").trim();
+    if (!trimmed || suggestingOutfit) return;
+    setSuggestingOutfit(true);
+    setComposerError("");
+    try {
+      const response = await fetch("/api/import/outfits/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: trimmed }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not suggest an outfit.");
+      const garmentIds = Array.isArray(result.garmentIds) ? result.garmentIds : [];
+      if (garmentIds.length < 2) throw new Error("Suggestion did not include enough garments.");
+      setComposerFromIds(garmentIds);
+      setSuggestCost(result.cost || null);
+      onSuccess?.();
+    } catch (requestError) {
+      setComposerError(requestError.message);
+    } finally {
+      setSuggestingOutfit(false);
+    }
+  }, [setComposerFromIds, suggestingOutfit]);
+
   const generateOutfit = useCallback(async () => {
     if (composerItems.length < 2) return;
     const snapshotItems = composerItems;
@@ -2111,13 +2293,22 @@ export function App() {
             onAdd={addToComposer}
             onRemove={removeFromComposer}
             onGenerate={generateOutfit}
+            suggesting={suggestingOutfit}
           />
-          <GallerySearch
-            value={searchQuery}
-            onChange={setSearchQuery}
-            placeholder={libraryTab === "outfits" ? "Search name or details" : "Search name or details"}
-            label={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
-          />
+          <div className="gallery-toolbar-tools">
+            <GalleryOutfitPrompt
+              onSubmit={suggestOutfit}
+              loading={suggestingOutfit}
+              disabled={loading}
+              cost={suggestCost}
+            />
+            <GallerySearch
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder={libraryTab === "outfits" ? "Search name or details" : "Search name or details"}
+              label={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
+            />
+          </div>
         </div>
 
         <header className="gallery-header">
@@ -2193,8 +2384,8 @@ export function App() {
                 tabIndex={libraryTab === "garments" ? undefined : -1}
                 title={type.label}
               >
-                {type.icon === "bookmark" ? (
-                  <BookmarkSimple size={15} weight={activeType === type.id ? "fill" : "regular"} aria-hidden="true" />
+                {type.icon === "shopping" ? (
+                  <ShoppingBag size={15} weight="regular" aria-hidden="true" />
                 ) : (
                   type.label
                 )}

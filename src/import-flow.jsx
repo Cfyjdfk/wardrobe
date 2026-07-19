@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowCounterClockwise, BookmarkSimple, Check, Plus, Sparkle, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Check, Plus, ShoppingBag, Sparkle, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
 import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import "./import-flow.css";
@@ -135,7 +135,7 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
                 onChange={(event) => setDraft({ ...draft, owned: !event.target.checked })}
               />
               <span className="import-ownership-toggle__mark" aria-hidden="true">
-                <BookmarkSimple size={14} weight={draft.owned === false ? "fill" : "regular"} />
+                <ShoppingBag size={14} weight="regular" />
               </span>
               <span className="import-ownership-toggle__copy">
                 <span className="import-ownership-toggle__title">Not owned</span>

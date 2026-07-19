@@ -125,3 +125,79 @@ Avoid: Completely hidden selected garments, invented zippers, buttons, openings 
   const direction = typeof options.prompt === "string" ? options.prompt.trim() : "";
   return direction ? `${base}\n\nUser direction: ${direction}` : base;
 }
+
+function catalogTags(item) {
+  return Array.isArray(item.tags)
+    ? item.tags.filter((tag) => typeof tag === "string" && tag.trim()).map((tag) => tag.trim().toLowerCase())
+    : [];
+}
+
+/** Score how well a garment's name/tags match words in the user prompt. */
+function promptMatchScore(item, promptText = "") {
+  const haystack = `${item.name || ""} ${catalogTags(item).join(" ")}`.toLowerCase();
+  if (!haystack.trim()) return 0;
+  return String(promptText || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2)
+    .reduce((score, word) => score + (haystack.includes(word) ? 1 : 0), 0);
+}
+
+/**
+ * After the model suggests an outfit, ensure every required part is present.
+ * Picks the best unused catalog item for each missing part (name/tag match preferred).
+ */
+export function ensureRequiredParts(garments = [], requiredParts = [], pool = [], prompt = "") {
+  const next = [...garments];
+  const usedIds = new Set(next.map((item) => item.id));
+  const present = new Set(next.map((item) => item.part));
+
+  for (const part of requiredParts) {
+    if (present.has(part)) continue;
+    const candidates = pool.filter((item) => item.part === part && !usedIds.has(item.id));
+    if (!candidates.length) continue;
+    candidates.sort((a, b) => promptMatchScore(b, prompt) - promptMatchScore(a, prompt));
+    const pick = candidates[0];
+    next.push(pick);
+    usedIds.add(pick.id);
+    present.add(part);
+  }
+
+  return sortGarmentsByPart(next);
+}
+
+export function buildOutfitSuggestPrompt(catalog = [], userPrompt = "") {
+  const wardrobe = catalog.map((item) => ({
+    id: item.id,
+    name: item.name || PART_LABEL[item.part] || "piece",
+    part: item.part,
+    category: PART_LABEL[item.part] || item.part || "piece",
+    color: item.color || null,
+    secondaryColor: item.secondaryColor || null,
+    palette: Array.isArray(item.palette) ? item.palette.slice(0, 4) : [],
+    tags: catalogTags(item),
+  }));
+
+  return `Pick one outfit from this wardrobe of owned garments.
+
+Parts (authoritative — use part, not the item name):
+- upperbody = Top
+- wholebody_up = Jacket (fleeces, coats, blazers, overshirts, and any other outer layer all count)
+- lowerbody = Bottom
+- accessories_up = Accessory
+- shoes = Shoes
+
+Rules:
+- Only use ids from the catalog. Every catalog item is owned; never invent or substitute ids.
+- Include one upperbody and one lowerbody.
+- At most one item per part except accessories_up.
+- Jacket, shoes, and accessories are optional unless the request asks for them.
+- If the request names a part explicitly or by a clear synonym (e.g. "jacket" or "coat" both mean wholebody_up), you must include a matching catalog item for that part in garmentIds, and list that part's id in requiredParts. Skip this only if the wardrobe truly has no item for that part.
+- requiredParts should otherwise be empty — don't list a part just because you chose to include it for style reasons.
+- Prefer color/tag harmony and the user's vibe (office, casual, etc.).
+
+User request: ${userPrompt}
+
+Catalog:
+${JSON.stringify(wardrobe)}`;
+}

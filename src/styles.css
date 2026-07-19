@@ -54,10 +54,8 @@ button { font: inherit; }
   top: 0;
   z-index: 20;
   display: flex;
-  /* Top-align so search doesn't vertically re-center (and lose hover)
-     when the composer wraps/grows as the field expands. */
-  align-items: flex-start;
-  flex-wrap: nowrap;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   padding: 14px 56px;
   background: color-mix(in srgb, var(--paper) 86%, transparent);
@@ -65,8 +63,17 @@ button { font: inherit; }
   backdrop-filter: blur(14px);
 }
 
+.gallery-toolbar-tools {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+}
+
 .outfit-composer-shell {
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -110,6 +117,47 @@ button { font: inherit; }
   padding: 16px 20px;
   background: color-mix(in srgb, var(--paper) 92%, #fff);
   box-shadow: 0 6px 22px rgba(25, 23, 18, .08);
+}
+
+.outfit-composer.is-suggesting {
+  position: relative;
+  min-height: 120px;
+  overflow: hidden;
+}
+
+.outfit-composer-suggesting {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.outfit-composer-rainbow {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background:
+    linear-gradient(
+      125deg,
+      #f2b8c6 0%,
+      #f0d4a8 22%,
+      #e8e4a8 40%,
+      #b8dfc8 58%,
+      #a8c8e8 76%,
+      #c8b8e8 100%
+    );
+  background-size: 220% 220%;
+  opacity: .72;
+  animation: modeled-hero-rainbow 2.4s ease-in-out infinite;
+}
+
+.outfit-composer.is-suggesting .outfit-composer-main {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .outfit-composer:hover,
@@ -487,6 +535,193 @@ button { font: inherit; }
   color: var(--ink);
   background: rgba(25, 25, 25, .07);
   outline: none;
+}
+
+.gallery-outfit-prompt {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--ink);
+}
+
+.gallery-outfit-prompt-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 48px;
+  padding: 4px;
+  overflow: hidden;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 92%, #fff);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 6px 22px rgba(25, 23, 18, .08);
+  transition: box-shadow 180ms ease, border-color 160ms ease;
+}
+
+.gallery-outfit-prompt:hover .gallery-outfit-prompt-bar,
+.gallery-outfit-prompt:focus-within .gallery-outfit-prompt-bar,
+.gallery-outfit-prompt.is-expanded .gallery-outfit-prompt-bar {
+  box-shadow: 0 10px 28px rgba(25, 23, 18, .12);
+}
+
+.gallery-outfit-prompt.is-loading .gallery-outfit-prompt-bar {
+  border-color: color-mix(in srgb, var(--line) 70%, var(--ink));
+}
+
+.gallery-outfit-prompt-toggle {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 160ms ease, transform 180ms var(--toolbar-ease);
+}
+
+.gallery-outfit-prompt-toggle:hover,
+.gallery-outfit-prompt-toggle:focus-visible {
+  background: rgba(25, 25, 25, .07);
+  outline: none;
+}
+
+.gallery-outfit-prompt-toggle:active {
+  transform: scale(0.94);
+}
+
+.gallery-outfit-prompt-toggle:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.gallery-outfit-prompt-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-6px);
+  pointer-events: none;
+  transition:
+    max-width 280ms var(--toolbar-ease),
+    opacity 160ms ease,
+    transform 240ms var(--toolbar-ease);
+}
+
+.gallery-outfit-prompt:hover .gallery-outfit-prompt-field,
+.gallery-outfit-prompt:focus-within .gallery-outfit-prompt-field,
+.gallery-outfit-prompt.is-expanded .gallery-outfit-prompt-field,
+.gallery-outfit-prompt.is-loading .gallery-outfit-prompt-field {
+  /* Slightly longer than search (field max 240px / input 180px). */
+  max-width: min(300px, calc(100vw - 120px));
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.gallery-outfit-prompt-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 220px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 0;
+  padding: 7px 6px 7px 2px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.gallery-outfit-prompt-field input::placeholder {
+  color: color-mix(in srgb, var(--muted) 72%, var(--paper));
+}
+
+.gallery-outfit-prompt-field input:focus {
+  outline: none;
+}
+
+.gallery-outfit-prompt-field input:disabled {
+  opacity: .7;
+}
+
+.gallery-outfit-prompt-send {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 220ms var(--toolbar-ease);
+}
+
+.gallery-outfit-prompt-send:hover,
+.gallery-outfit-prompt-send:focus-visible {
+  color: var(--ink);
+  background: rgba(25, 25, 25, .07);
+  outline: none;
+}
+
+.gallery-outfit-prompt-send:active {
+  transform: scale(0.94);
+}
+
+.gallery-outfit-prompt-send:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.gallery-outfit-prompt-send:disabled:hover {
+  background: transparent;
+}
+
+.gallery-outfit-prompt-cost {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: auto;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  width: max-content;
+  max-width: min(220px, 70vw);
+  padding: 0;
+  opacity: .72;
+  pointer-events: none;
+  text-align: right;
+}
+
+.gallery-outfit-prompt-cost .generation-cost {
+  justify-content: flex-end;
+  font-size: 10px;
+  gap: 5px 8px;
+  white-space: nowrap;
+}
+
+.gallery-outfit-prompt-cost .generation-cost-tokens::after {
+  font-size: 9px;
 }
 
 .outfits-section {
@@ -1022,7 +1257,7 @@ button { font: inherit; }
   overflow: hidden;
   isolation: isolate;
   background: var(--paper);
-  cursor: zoom-in;
+  cursor: pointer;
   transition: border-color 160ms ease;
   content-visibility: auto;
   contain-intrinsic-size: auto 220px;
@@ -1060,6 +1295,21 @@ button { font: inherit; }
   place-items: center;
   color: var(--ink);
   pointer-events: none;
+}
+
+.gallery-item-owned--small {
+  top: 6px;
+  right: 6px;
+}
+
+.gallery-item-owned--medium {
+  top: 8px;
+  right: 8px;
+}
+
+.gallery-item-owned--large {
+  top: 12px;
+  right: 12px;
 }
 
 .status {
@@ -1875,61 +2125,77 @@ button.modeled-hero-zoom {
   gap: 20px 14px;
 }
 
-.ownership-toggle {
+.ownership-switch {
   grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--paper) 92%, #fff);
   cursor: pointer;
 }
 
-.ownership-toggle input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ownership-toggle__mark {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
-
-.ownership-toggle:has(input:checked) {
-  border-color: rgba(25, 25, 25, 0.22);
-  background: color-mix(in srgb, var(--paper) 82%, var(--ink));
-}
-
-.ownership-toggle:has(input:checked) .ownership-toggle__mark {
-  color: var(--ink);
-}
-
-.ownership-toggle__copy {
+.ownership-switch__copy {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.ownership-toggle__title {
+.ownership-switch__title {
   color: var(--ink);
   font-size: 13px;
   font-weight: 520;
   letter-spacing: 0.01em;
 }
 
-.ownership-toggle__hint {
+.ownership-switch__hint {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
 }
 
-.ownership-toggle:focus-within {
+.ownership-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.ownership-switch__track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 28%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--line) 70%, var(--ink));
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.ownership-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: 0 1px 3px rgba(25, 23, 18, .18);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ownership-switch:has(input:checked) .ownership-switch__track {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.ownership-switch:has(input:checked) .ownership-switch__thumb {
+  transform: translateX(18px);
+}
+
+.ownership-switch:has(input:focus-visible) .ownership-switch__track {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -2328,6 +2594,13 @@ button.modeled-hero-zoom {
     max-width: min(180px, calc(100vw - 92px));
   }
 
+  .gallery-outfit-prompt:hover .gallery-outfit-prompt-field,
+  .gallery-outfit-prompt:focus-within .gallery-outfit-prompt-field,
+  .gallery-outfit-prompt.is-expanded .gallery-outfit-prompt-field,
+  .gallery-outfit-prompt.is-loading .gallery-outfit-prompt-field {
+    max-width: min(220px, calc(100vw - 92px));
+  }
+
   .gallery-header { padding: max(20px, env(safe-area-inset-top)) 18px 0; }
   .piece-count { font-size: 12px; }
   .library-tabs button { font-size: 12px; }
@@ -2404,6 +2677,11 @@ button.modeled-hero-zoom {
   .gallery-search,
   .gallery-search-field,
   .gallery-search-toggle,
+  .gallery-outfit-prompt,
+  .gallery-outfit-prompt-bar,
+  .gallery-outfit-prompt-toggle,
+  .gallery-outfit-prompt-field,
+  .gallery-outfit-prompt-send,
   .outfit-generate-button { transition: none; }
   .viewer-overlay,
   .viewer-entry,
@@ -2411,7 +2689,8 @@ button.modeled-hero-zoom {
   .gallery-skeleton-item,
   .piece-count-skeleton,
   .modeled-hero-rainbow,
-  .viewer-art-rainbow { animation: none; }
+  .viewer-art-rainbow,
+  .outfit-composer-rainbow { animation: none; }
   .image-zoom-lightbox__frame img { transition: none; }
   .viewer.shake {
     animation: none;
