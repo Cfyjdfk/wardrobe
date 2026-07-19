@@ -135,11 +135,17 @@ function measureGridColumnCount(grid) {
 
 function lockBodyScroll() {
   const scrollY = window.scrollY;
+  // Compensate for the disappearing page scrollbar so the gallery doesn't shift sideways.
+  const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
   document.body.classList.add("viewer-open");
   document.body.style.top = `-${scrollY}px`;
+  if (scrollbarWidth > 0) {
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+  }
   return () => {
     document.body.classList.remove("viewer-open");
     document.body.style.top = "";
+    document.body.style.paddingRight = "";
     window.scrollTo(0, scrollY);
   };
 }
@@ -447,13 +453,40 @@ const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen, 
   );
 });
 
+function useClickOutsideToClose(open, onClose) {
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event) => {
+      if (rootRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open, onClose]);
+
+  return rootRef;
+}
+
 function GallerySearch({ value, onChange, placeholder = "Search name or details", label = "Search" }) {
   const inputRef = useRef(null);
   const [open, setOpen] = useState(false);
-  const expanded = open || !!value.trim();
+  const active = !!value.trim();
+  const expanded = open || active;
+  const close = useCallback(() => {
+    // Keep the field open while a query is active so the filter stays visible.
+    if (value.trim()) {
+      inputRef.current?.blur();
+      return;
+    }
+    setOpen(false);
+    inputRef.current?.blur();
+  }, [value]);
+  const rootRef = useClickOutsideToClose(open && !active, close);
 
   return (
-    <div className={`gallery-search${expanded ? " is-expanded" : ""}`}>
+    <div ref={rootRef} className={`gallery-search${expanded ? " is-expanded" : ""}${active ? " is-active" : ""}`}>
       <button
         type="button"
         className="gallery-search-toggle"
@@ -461,9 +494,17 @@ function GallerySearch({ value, onChange, placeholder = "Search name or details"
           setOpen(true);
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        aria-label={expanded ? label : "Open search"}
+        aria-label={
+          active
+            ? `${label}, active filter: ${value.trim()}`
+            : expanded
+              ? label
+              : "Open search"
+        }
+        aria-expanded={expanded}
       >
         <MagnifyingGlass size={17} weight="bold" aria-hidden="true" />
+        {active && <span className="gallery-search-active-dot" aria-hidden="true" />}
       </button>
       <div className="gallery-search-field">
         <input
@@ -472,8 +513,12 @@ function GallerySearch({ value, onChange, placeholder = "Search name or details"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onFocus={() => setOpen(true)}
-          onBlur={() => {
-            if (!value.trim()) setOpen(false);
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              if (value) onChange("");
+              close();
+            }
           }}
           placeholder={placeholder}
           aria-label={label}
@@ -505,8 +550,16 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const trimmed = value.trim();
-  const expanded = open || !!trimmed || loading;
+  // Click-to-expand only — draft text alone should not keep the bar open after click-outside.
+  const expanded = open || loading;
   const canSend = !!trimmed && !loading && !disabled;
+
+  const close = useCallback(() => {
+    if (loading) return;
+    setOpen(false);
+    inputRef.current?.blur();
+  }, [loading]);
+  const rootRef = useClickOutsideToClose(open && !loading, close);
 
   // After a generation finishes, always collapse back to the circular wand.
   useEffect(() => {
@@ -528,7 +581,7 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
   };
 
   return (
-    <div className={`gallery-outfit-prompt${expanded ? " is-expanded" : ""}${loading ? " is-loading" : ""}`}>
+    <div ref={rootRef} className={`gallery-outfit-prompt${expanded ? " is-expanded" : ""}${loading ? " is-loading" : ""}`}>
       <div className="gallery-outfit-prompt-bar">
         <button
           type="button"
@@ -551,9 +604,6 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
             disabled={disabled || loading}
             onChange={(event) => setValue(event.target.value.slice(0, 500))}
             onFocus={() => setOpen(true)}
-            onBlur={() => {
-              if (!trimmed && !loading) setOpen(false);
-            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -562,11 +612,10 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
               if (event.key === "Escape") {
                 event.preventDefault();
                 setValue("");
-                setOpen(false);
-                inputRef.current?.blur();
+                close();
               }
             }}
-            placeholder="Describe an outfit idea (e.g. 'smart summer brunch with sandals')"
+            placeholder="Describe an outfit idea (e.g. 'summer brunch')"
             aria-label="AI outfit prompt"
             autoComplete="off"
             spellCheck="false"
@@ -593,7 +642,7 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
   );
 }
 
-function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate, suggesting = false }) {
+function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate, onOpen, suggesting = false }) {
   const [draggingOver, setDraggingOver] = useState(false);
   const ordered = sortByPart(items);
   const canGenerate = ordered.length >= 2 && !suggesting;
@@ -651,12 +700,20 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
                       </span>
                     )}
                     <div className="outfit-composer-chip">
-                      <OptimizedImage
-                        src={item.thumbnail || item.image}
-                        alt=""
-                        sizes="128px"
-                        breakpoints={[96, 128, 160, 256]}
-                      />
+                      <button
+                        type="button"
+                        className="outfit-composer-chip-open"
+                        disabled={suggesting || !onOpen}
+                        onClick={() => onOpen?.(item.id)}
+                        aria-label={`View ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
+                      >
+                        <OptimizedImage
+                          src={item.thumbnail || item.image}
+                          alt=""
+                          sizes="128px"
+                          breakpoints={[96, 128, 160, 256]}
+                        />
+                      </button>
                       <button
                         type="button"
                         className="outfit-composer-remove"
@@ -2293,6 +2350,7 @@ export function App() {
             onAdd={addToComposer}
             onRemove={removeFromComposer}
             onGenerate={generateOutfit}
+            onOpen={openItem}
             suggesting={suggestingOutfit}
           />
           <div className="gallery-toolbar-tools">

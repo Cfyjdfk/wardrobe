@@ -132,6 +132,107 @@ function catalogTags(item) {
     : [];
 }
 
+function parseHexRgb(hex) {
+  if (typeof hex !== "string") return null;
+  const match = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return null;
+  const value = match[1];
+  return {
+    r: parseInt(value.slice(0, 2), 16),
+    g: parseInt(value.slice(2, 4), 16),
+    b: parseInt(value.slice(4, 6), 16),
+  };
+}
+
+/**
+ * Map a garment hex to human color names the suggest model can match against
+ * prompts like "red outfit" (hex alone is easy to miss for dark burgundy).
+ */
+export function colorFamiliesFromHex(hex) {
+  const rgb = parseHexRgb(hex);
+  if (!rgb) return [];
+  const { r, g, b } = rgb;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const chroma = max - min;
+  const lightness = (max + min) / 2 / 255;
+  const saturation = max === 0 ? 0 : chroma / max;
+
+  if (max < 38 && lightness < 0.16) return ["black"];
+  if (min > 210 && saturation < 0.12) return ["white"];
+  if (saturation < 0.12) {
+    if (lightness < 0.28) return ["black", "charcoal", "gray"];
+    if (lightness > 0.78) return ["white", "ivory", "cream"];
+    return ["gray", "grey", "neutral"];
+  }
+
+  let hue = 0;
+  if (chroma > 0) {
+    if (max === r) hue = ((g - b) / chroma) % 6;
+    else if (max === g) hue = (b - r) / chroma + 2;
+    else hue = (r - g) / chroma + 4;
+    hue *= 60;
+    if (hue < 0) hue += 360;
+  }
+
+  const families = [];
+  const push = (...names) => {
+    for (const name of names) {
+      if (!families.includes(name)) families.push(name);
+    }
+  };
+
+  // Deep crimson/burgundy often sits near hue 330–360; treat dark warm tones as red first.
+  if (hue < 18 || hue >= 330) {
+    if (lightness < 0.42) push("red", "burgundy", "maroon", "wine", "dark red");
+    else if (lightness > 0.62 && hue >= 330 && hue < 350) push("pink", "red");
+    else push("red");
+    if (lightness > 0.62 && hue < 18) push("pink", "light red");
+  } else if (hue < 45) {
+    push("orange", "rust");
+    if (lightness < 0.4) push("brown", "terracotta");
+    if (r > g && r > b + 25) push("red");
+  } else if (hue < 70) {
+    push("yellow", "gold");
+    if (lightness < 0.45) push("mustard", "tan");
+  } else if (hue < 160) {
+    push("green");
+    if (hue < 95) push("olive", "lime");
+    if (lightness < 0.35) push("forest", "dark green");
+  } else if (hue < 200) {
+    push("teal", "cyan");
+    if (lightness < 0.4) push("green");
+  } else if (hue < 255) {
+    push("blue");
+    if (lightness < 0.35) push("navy", "dark blue");
+    else if (lightness > 0.65) push("light blue", "sky");
+  } else if (hue < 290) {
+    push("purple", "violet");
+    if (lightness < 0.4) push("plum");
+  } else if (hue < 330) {
+    push("pink", "magenta");
+    if (r > b && lightness < 0.42) push("red", "burgundy", "maroon");
+  }
+
+  if (hue >= 15 && hue < 50 && lightness < 0.42 && saturation < 0.55) push("brown", "tan");
+  if (hue >= 30 && hue < 70 && lightness > 0.55 && saturation < 0.45) push("beige", "cream", "khaki");
+
+  return families;
+}
+
+function catalogColorFamilies(item) {
+  const seen = new Set();
+  const families = [];
+  for (const hex of [item.color, item.secondaryColor, ...(Array.isArray(item.palette) ? item.palette.slice(0, 4) : [])]) {
+    for (const name of colorFamiliesFromHex(hex)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      families.push(name);
+    }
+  }
+  return families;
+}
+
 /** Score how well a garment's name/tags match words in the user prompt. */
 function promptMatchScore(item, promptText = "") {
   const haystack = `${item.name || ""} ${catalogTags(item).join(" ")}`.toLowerCase();
@@ -175,6 +276,7 @@ export function buildOutfitSuggestPrompt(catalog = [], userPrompt = "") {
     color: item.color || null,
     secondaryColor: item.secondaryColor || null,
     palette: Array.isArray(item.palette) ? item.palette.slice(0, 4) : [],
+    colorFamilies: catalogColorFamilies(item),
     tags: catalogTags(item),
   }));
 
@@ -194,6 +296,7 @@ Rules:
 - Jacket, shoes, and accessories are optional unless the request asks for them.
 - If the request names a part explicitly or by a clear synonym (e.g. "jacket" or "coat" both mean wholebody_up), you must include a matching catalog item for that part in garmentIds, and list that part's id in requiredParts. Skip this only if the wardrobe truly has no item for that part.
 - requiredParts should otherwise be empty — don't list a part just because you chose to include it for style reasons.
+- When the user names a color (e.g. "red"), prefer garments whose colorFamilies include that color or a close synonym (burgundy/maroon/wine count as red; navy counts as blue). Do not ignore a matching piece just because the hex looks dark.
 - Prefer color/tag harmony and the user's vibe (office, casual, etc.).
 
 User request: ${userPrompt}
