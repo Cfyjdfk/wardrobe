@@ -280,7 +280,18 @@
 .import-card.is-selected { border-color: rgba(36, 35, 31, 0.48); background: rgba(255, 255, 255, 0.7); }
 
 .import-editor { display: grid; grid-template-columns: minmax(140px, 0.8fr) minmax(0, 1.2fr); gap: 20px; }
+.import-editor__preview-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  cursor: zoom-in;
+}
 .import-editor__preview { width: 100%; max-height: 360px; object-fit: contain; background: var(--import-ivory); border-radius: 16px; }
+.import-image-zoom-lightbox { z-index: 130; }
 .import-cleanup-editor { display: grid; gap: 14px; }
 .import-cleanup-editor > .import-card__detail { max-width: 680px; line-height: 1.45; }
 .import-cleanup-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

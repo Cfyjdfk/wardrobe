@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowCounterClockwise, Check, Plus, Sparkle, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
+import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import "./import-flow.css";
 
 const API = "/api/import/jobs";
@@ -86,14 +87,28 @@ function defaultDraft(job) {
 }
 
 function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt, busy, onAction }) {
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const asset = job.stages[stage]?.assetUrl;
   const isCrop = stage === "crop";
   const isGarment = stage === "garment";
+  const isModeled = stage === "modeled";
+  const previewAlt = isCrop ? "Detected item crop" : isGarment ? "Extracted garment" : "Generated modeled look";
   const primaryValid = HEX_COLOR.test(draft.color);
   const secondaryValid = !draft.secondaryColor || HEX_COLOR.test(draft.secondaryColor);
   return (
     <div className="import-editor">
-      <img className="import-editor__preview" src={asset} alt={isCrop ? "Detected item crop" : isGarment ? "Extracted garment" : "Generated modeled look"} />
+      {isModeled && asset ? (
+        <button
+          type="button"
+          className="import-editor__preview-button image-zoom-trigger"
+          onClick={() => setLightboxOpen(true)}
+          aria-label="View larger modeled photo"
+        >
+          <img className="import-editor__preview" src={asset} alt={previewAlt} />
+        </button>
+      ) : (
+        <img className="import-editor__preview" src={asset} alt={previewAlt} />
+      )}
       <div className="import-fields">
         <p className="import-editor__stage">{isCrop ? "Detected item" : isGarment ? "Garment image" : "Modeled image"}</p>
         {isCrop ? <p className="import-card__detail">Check that this crop contains the complete intended item. Approving it starts the clean garment-image generation.</p> : isGarment ? (
@@ -115,6 +130,14 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
           <button className="import-button import-button--primary" disabled={busy || (isGarment && (!draft.name.trim() || !primaryValid || !secondaryValid))} onClick={() => onAction("approve")}><Check size={14} weight="bold" /> {isCrop ? "Use crop" : "Approve"}</button>
         </div>
       </div>
+      {lightboxOpen && asset && (
+        <ImageZoomLightbox
+          className="import-image-zoom-lightbox"
+          src={asset}
+          alt={previewAlt}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
     </div>
   );
 }

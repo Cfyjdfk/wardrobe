@@ -43,7 +43,10 @@ button { font: inherit; }
   top: 0;
   z-index: 20;
   display: flex;
-  align-items: center;
+  /* Top-align so search doesn't vertically re-center (and lose hover)
+     when the composer wraps/grows as the field expands. */
+  align-items: flex-start;
+  flex-wrap: nowrap;
   gap: 10px;
   padding: 14px 56px;
   background: color-mix(in srgb, var(--paper) 86%, transparent);
@@ -82,7 +85,8 @@ button { font: inherit; }
 }
 
 .outfit-composer.has-items {
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   border-radius: 28px;
   padding: 16px 20px;
 }
@@ -110,7 +114,8 @@ button { font: inherit; }
 }
 
 .outfit-composer.has-items .outfit-composer-main {
-  align-items: center;
+  flex: 1 1 auto;
+  align-items: stretch;
   padding-left: 2px;
 }
 
@@ -258,7 +263,14 @@ button { font: inherit; }
 }
 
 .outfit-composer.has-items .outfit-composer-actions {
-  align-self: center;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px 12px;
+}
+
+.outfit-composer.has-items .outfit-composer-prompt {
+  flex: 1 1 220px;
 }
 
 .outfit-composer-hint {
@@ -326,7 +338,7 @@ button { font: inherit; }
 
 .gallery-search {
   flex: 0 0 auto;
-  align-self: center;
+  align-self: flex-start;
   display: flex;
   align-items: center;
   gap: 0;
@@ -553,6 +565,12 @@ button { font: inherit; }
   width: 100%;
   height: auto;
   aspect-ratio: 1;
+  overflow: hidden;
+}
+
+.viewer.has-outfit-image .outfit-hero .modeled-hero-zoom {
+  inset: 0;
+  height: auto;
 }
 
 .viewer.has-outfit-image .outfit-hero .modeled-hero-photo {
@@ -867,7 +885,8 @@ button { font: inherit; }
   flex: 0 0 386px;
   width: 100%;
   height: 386px;
-  overflow: hidden;
+  /* Let the floating garment hang past the hero; photo is clipped separately. */
+  overflow: visible;
 }
 
 .modeled-hero-photo {
@@ -1050,8 +1069,8 @@ button { font: inherit; }
 .viewer-art.viewer-art-floating {
   --piece-rotation: -2deg;
   position: absolute;
-  right: 20px;
-  bottom: 2px;
+  right: 8px;
+  bottom: -36px;
   z-index: 5;
   flex: none;
   width: 36%;
@@ -1147,7 +1166,7 @@ button { font: inherit; }
 }
 
 .has-modeled-image .modeled-photo-control {
-  margin-top: 6px;
+  margin-top: 28px;
   padding-top: 0;
   padding-inline: 34px;
 }
@@ -1254,8 +1273,12 @@ button.modeled-hero-zoom {
 
 .modeled-hero-zoom {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  left: 0;
   z-index: 0;
+  height: 370px;
+  overflow: hidden;
 }
 
 .modeled-hero-zoom .modeled-hero-photo {
@@ -1858,7 +1881,6 @@ button.modeled-hero-zoom {
 
 @media (max-width: 520px) {
   .gallery-toolbar {
-    align-items: flex-start;
     padding: 10px 12px;
     gap: 8px;
   }
@@ -1890,6 +1912,10 @@ button.modeled-hero-zoom {
     min-width: 0;
   }
 
+  .outfit-composer.has-items .outfit-composer-actions {
+    justify-content: flex-end;
+  }
+
   .outfit-composer-actions {
     flex: 1 1 auto;
     justify-content: flex-start;
@@ -1918,8 +1944,8 @@ button.modeled-hero-zoom {
   .viewer { padding: max(24px, env(safe-area-inset-top)) 22px max(28px, env(safe-area-inset-bottom)); }
   .modeled-hero { flex-basis: 340px; height: 340px; }
   .modeled-hero-photo { height: 326px; object-position: 49% 43%; }
+  .modeled-hero-zoom { height: 326px; }
   .modeled-hero::after { height: 112px; }
-  .has-modeled-image .modeled-photo-control { margin-top: 4px; }
   .viewer.has-outfit-image .outfit-hero {
     flex-basis: auto;
     height: auto;
@@ -1929,10 +1955,15 @@ button.modeled-hero-zoom {
     height: 100%;
     object-position: center top;
   }
+  .viewer.has-outfit-image .outfit-hero .modeled-hero-zoom {
+    inset: 0;
+    height: auto;
+  }
   .modeled-heading h2 { font-size: 17px; }
   .has-modeled-image .viewer-icon-close { top: 20px; right: 20px; }
   .viewer-heading.has-back { padding-top: 52px; }
-  .viewer-art.viewer-art-floating { right: 15px; bottom: 0; flex-basis: auto; width: 40%; height: 158px; min-height: 0; padding: 0; }
+  .viewer-art.viewer-art-floating { right: 4px; bottom: -28px; left: auto; top: auto; flex-basis: auto; width: 40%; height: 158px; min-height: 0; padding: 0; }
+  .has-modeled-image .modeled-photo-control { margin-top: 22px; }
   .has-modeled-image .viewer-details.editing { padding: 12px 22px 30px; }
   .viewer-heading { padding-top: 0; }
   .viewer-art { flex-basis: min(30vh, 260px); height: min(30vh, 260px); min-height: 190px; padding-block: 10px 8px; }

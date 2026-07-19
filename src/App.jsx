@@ -1,7 +1,8 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
+import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
@@ -121,100 +122,6 @@ function GenerationCostMeta({ costs, singleCost }) {
         </span>
       ))}
     </p>
-  );
-}
-
-function ImageZoomLightbox({ src, alt, onClose, onNavigate, canPrev = false, canNext = false, label = "item" }) {
-  const scrollerRef = useRef(null);
-  const frameRef = useRef(null);
-  const pendingFocusRef = useRef(null);
-  const [zoomed, setZoomed] = useState(false);
-
-  useEffect(() => {
-    setZoomed(false);
-    if (scrollerRef.current) {
-      scrollerRef.current.scrollLeft = 0;
-      scrollerRef.current.scrollTop = 0;
-    }
-  }, [src]);
-
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      const delta = arrowNavigationDelta(event.key);
-      if (!delta || !onNavigate) return;
-      event.preventDefault();
-      event.stopPropagation();
-      onNavigate(delta);
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, onNavigate]);
-
-  useLayoutEffect(() => {
-    if (!zoomed || !pendingFocusRef.current || !scrollerRef.current || !frameRef.current) return;
-    const { x, y } = pendingFocusRef.current;
-    pendingFocusRef.current = null;
-    const scroller = scrollerRef.current;
-    const frame = frameRef.current;
-    scroller.scrollLeft = Math.max(0, frame.offsetWidth * x - scroller.clientWidth / 2);
-    scroller.scrollTop = Math.max(0, frame.offsetHeight * y - scroller.clientHeight / 2);
-  }, [zoomed]);
-
-  const toggleZoom = (event) => {
-    if (zoomed) {
-      if (scrollerRef.current) {
-        scrollerRef.current.scrollLeft = 0;
-        scrollerRef.current.scrollTop = 0;
-      }
-      setZoomed(false);
-      return;
-    }
-    const image = event.currentTarget.querySelector("img");
-    const rect = (image || event.currentTarget).getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      setZoomed(true);
-      return;
-    }
-    pendingFocusRef.current = {
-      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
-    };
-    setZoomed(true);
-  };
-
-  if (!src) return null;
-
-  return (
-    <div
-      ref={scrollerRef}
-      className={`image-zoom-lightbox${zoomed ? " is-zoomed" : ""}`}
-      role="dialog"
-      aria-modal="true"
-      aria-label={alt || "Zoomed image"}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <button className="image-zoom-lightbox__close" type="button" onClick={onClose} aria-label="Close zoomed image">
-        <X size={24} weight="light" aria-hidden="true" />
-      </button>
-      <ViewerNavArrows onNavigate={onNavigate} label={label} canPrev={canPrev} canNext={canNext} />
-      <button
-        ref={frameRef}
-        className={`image-zoom-lightbox__frame${zoomed ? " is-zoomed" : ""}`}
-        type="button"
-        onClick={toggleZoom}
-        aria-label={zoomed ? "Minimize image" : "Zoom image"}
-      >
-        <img src={src} alt={alt || ""} />
-      </button>
-    </div>
   );
 }
 
@@ -549,37 +456,37 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
               </div>
             )}
           </div>
-
-          {ordered.length >= 2 && (
-            <label className="outfit-composer-prompt">
-              <span className="outfit-composer-prompt-label">Details (optional)</span>
-              <input
-                type="text"
-                value={prompt}
-                onChange={(event) => onPromptChange(event.target.value)}
-                placeholder="e.g. tucked shirt, evening street"
-                maxLength={1200}
-              />
-            </label>
-          )}
         </div>
 
-        <div className="outfit-composer-actions">
-          {ordered.length > 0 && ordered.length < 2 && (
-            <p className="outfit-composer-hint">Add at least one more garment</p>
-          )}
-          {ordered.length >= 2 && (
-            <button
-              className="outfit-generate-button"
-              type="button"
-              disabled={!canGenerate}
-              onClick={onGenerate}
-            >
-              <Sparkle size={15} weight="fill" aria-hidden="true" />
-              <span>Generate</span>
-            </button>
-          )}
-        </div>
+        {ordered.length > 0 && (
+          <div className="outfit-composer-actions">
+            {ordered.length < 2 ? (
+              <p className="outfit-composer-hint">Add at least one more garment</p>
+            ) : (
+              <>
+                <label className="outfit-composer-prompt">
+                  <span className="outfit-composer-prompt-label">Details (optional)</span>
+                  <input
+                    type="text"
+                    value={prompt}
+                    onChange={(event) => onPromptChange(event.target.value)}
+                    placeholder="e.g. tucked shirt, evening street"
+                    maxLength={1200}
+                  />
+                </label>
+                <button
+                  className="outfit-generate-button"
+                  type="button"
+                  disabled={!canGenerate}
+                  onClick={onGenerate}
+                >
+                  <Sparkle size={15} weight="fill" aria-hidden="true" />
+                  <span>Generate</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </section>
       {error && <p className="outfit-composer-error" role="alert">{error}</p>}
     </div>
