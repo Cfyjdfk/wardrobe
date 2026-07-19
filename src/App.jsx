@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
@@ -8,13 +8,31 @@ import { OptimizedImage } from "./OptimizedImage.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
+const TILE_SIZE_STORAGE_KEY = "open-wardrobe-garment-tile-size-v1";
 const AUTOSAVE_MS = 1000;
 const GARMENT_DRAG_MIME = "application/x-wardrobe-garment";
 
+const GARMENT_TILE_SIZES = [
+  { id: "small", label: "Small tiles" },
+  { id: "medium", label: "Medium tiles" },
+  { id: "large", label: "Large tiles" },
+];
+const DEFAULT_GARMENT_TILE_SIZE = "medium";
+
+function readGarmentTileSize() {
+  try {
+    const value = localStorage.getItem(TILE_SIZE_STORAGE_KEY);
+    if (GARMENT_TILE_SIZES.some((size) => size.id === value)) return value;
+  } catch {
+    // Ignore storage failures and fall back to the default density.
+  }
+  return DEFAULT_GARMENT_TILE_SIZE;
+}
+
 const PART_TYPES = [
   { id: "upperbody", label: "Tops", singular: "Top" },
-  { id: "wholebody_up", label: "Jackets", singular: "Jacket" },
   { id: "lowerbody", label: "Bottoms", singular: "Bottom" },
+  { id: "wholebody_up", label: "Jackets", singular: "Jacket" },
   { id: "accessories_up", label: "Accessories", singular: "Accessory" },
   { id: "shoes", label: "Shoes", singular: "Shoes" },
 ];
@@ -42,14 +60,31 @@ const GARMENT_FUSE_OPTIONS = {
 const OUTFIT_FUSE_OPTIONS = {
   keys: [
     { name: "name", weight: 0.4 },
-    { name: "prompt", weight: 0.25 },
-    { name: "setting", weight: 0.15 },
+    { name: "tags", weight: 0.3 },
+    { name: "setting", weight: 0.1 },
     { name: "garmentNames", weight: 0.12 },
     { name: "garmentTags", weight: 0.08 },
   ],
   threshold: 0.38,
   ignoreLocation: true,
 };
+
+function normalizeDetailTags(tags) {
+  const seen = new Set();
+  const next = [];
+  for (const entry of Array.isArray(tags) ? tags : []) {
+    if (typeof entry !== "string") continue;
+    const tag = entry.trim().replace(/^#/, "").toLowerCase().slice(0, 40);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    next.push(tag);
+  }
+  return next;
+}
+
+function outfitDetailTags(outfit) {
+  return Array.isArray(outfit?.tags) ? normalizeDetailTags(outfit.tags) : [];
+}
 
 function sortByPart(items) {
   return [...items].sort((a, b) => {
@@ -316,9 +351,9 @@ function sampleImageColor(image, canvas, event) {
 
 const GALLERY_SKELETON_COUNT = 12;
 
-function GallerySkeleton({ count = GALLERY_SKELETON_COUNT }) {
+function GallerySkeleton({ count = GALLERY_SKELETON_COUNT, tileSize = DEFAULT_GARMENT_TILE_SIZE }) {
   return (
-    <section className="gallery-grid gallery-grid--skeleton" aria-busy="true" aria-label="Loading wardrobe">
+    <section className={`gallery-grid gallery-grid--${tileSize} gallery-grid--skeleton`} aria-busy="true" aria-label="Loading wardrobe">
       {Array.from({ length: count }, (_, index) => (
         <div
           key={index}
@@ -331,10 +366,20 @@ function GallerySkeleton({ count = GALLERY_SKELETON_COUNT }) {
   );
 }
 
-const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen }) {
+const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen, tileSize = DEFAULT_GARMENT_TILE_SIZE }) {
   const type = TYPE_MAP[item.part]?.singular || "wardrobe item";
   const owned = isOwned(item);
   const dragMoved = useRef(false);
+  const imageSizes = tileSize === "large"
+    ? "(max-width: 520px) 92vw, (max-width: 860px) 45vw, 300px"
+    : tileSize === "small"
+      ? "(max-width: 520px) 46vw, (max-width: 860px) 30vw, 160px"
+      : "(max-width: 520px) 46vw, (max-width: 860px) 45vw, 220px";
+  const imageBreakpoints = tileSize === "large"
+    ? [200, 280, 360, 480, 640]
+    : tileSize === "small"
+      ? [120, 160, 200, 280]
+      : [140, 200, 280, 360, 480];
 
   return (
     <button
@@ -371,8 +416,8 @@ const GalleryItem = memo(function GalleryItem({ item, selected, hidden, onOpen }
       <OptimizedImage
         src={item.thumbnail || item.image}
         alt=""
-        sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 180px"
-        breakpoints={[120, 180, 240, 320, 480]}
+        sizes={imageSizes}
+        breakpoints={imageBreakpoints}
       />
       {!owned && (
         <span className="gallery-item-owned" title="Not owned" aria-hidden="true">
@@ -562,13 +607,15 @@ const OutfitsSection = memo(function OutfitsSection({ outfits, selectedId, onOpe
               aria-pressed={selectedId === outfit.id}
             >
               {outfit.status === "ready" && outfit.image ? (
-                <OptimizedImage
-                  src={outfit.image}
-                  alt=""
-                  draggable={false}
-                  sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 220px"
-                  breakpoints={[160, 220, 320, 440]}
-                />
+                <div className="outfit-card-media">
+                  <OptimizedImage
+                    src={outfit.image}
+                    alt=""
+                    draggable={false}
+                    sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(50vw - 24px), (max-width: 1180px) calc(33vw - 28px), calc(25vw - 36px)"
+                    breakpoints={[240, 320, 420, 560, 720]}
+                  />
+                </div>
               ) : (
                 <div className="outfit-card-placeholder" role="status">
                   <span>{outfit.error || "Generation failed"}</span>
@@ -594,6 +641,7 @@ const GarmentsPanel = memo(function GarmentsPanel({
   onOpen,
   activeType,
   searching,
+  tileSize = DEFAULT_GARMENT_TILE_SIZE,
 }) {
   const emptyFilterMessage = (() => {
     if (searching) return "No garments match this search.";
@@ -603,14 +651,14 @@ const GarmentsPanel = memo(function GarmentsPanel({
 
   return (
     <>
-      {!error && loading && <GallerySkeleton />}
+      {!error && loading && <GallerySkeleton tileSize={tileSize} />}
       {!error && !loading && !itemsLength && <p className="status empty">Drop, paste, or add a photo to import your first piece.</p>}
       {!error && !loading && !!itemsLength && !visibleCount && (
         <p className="status empty">{emptyFilterMessage}</p>
       )}
       {!loading && !!galleryItems.length && (
         <section
-          className="gallery-grid"
+          className={`gallery-grid gallery-grid--${tileSize}`}
           aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}
           hidden={!visibleCount}
         >
@@ -621,6 +669,7 @@ const GarmentsPanel = memo(function GarmentsPanel({
               selected={selectedId === item.id}
               hidden={!visibleItemIds.has(item.id)}
               onOpen={onOpen}
+              tileSize={tileSize}
             />
           ))}
         </section>
@@ -628,6 +677,33 @@ const GarmentsPanel = memo(function GarmentsPanel({
     </>
   );
 });
+
+function GarmentTileSizeToggle({ value, onChange }) {
+  return (
+    <div className="tile-size-toggle" role="group" aria-label="Garment tile size">
+      {GARMENT_TILE_SIZES.map((size) => {
+        const cellCount = size.id === "small" ? 9 : size.id === "medium" ? 4 : 1;
+        return (
+          <button
+            key={size.id}
+            type="button"
+            className={value === size.id ? "active" : ""}
+            aria-pressed={value === size.id}
+            aria-label={size.label}
+            title={size.label}
+            onClick={() => onChange(size.id)}
+          >
+            <span className={`tile-size-icon tile-size-icon--${size.id}`} aria-hidden="true">
+              {Array.from({ length: cellCount }, (_, index) => (
+                <i key={index} />
+              ))}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 const OutfitsPanel = memo(function OutfitsPanel({
   error,
@@ -659,15 +735,19 @@ const OutfitsPanel = memo(function OutfitsPanel({
 function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext }) {
   const closeButtonRef = useRef(null);
   const [name, setName] = useState(outfit.name || "");
+  const [tags, setTags] = useState(() => outfitDetailTags(outfit));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
   const hasImage = outfit.status === "ready" && Boolean(outfit.image);
   const orderedGarments = sortByPart(garments);
-  const isDirty = name.trim() !== (outfit.name || "").trim();
+  const savedTags = outfitDetailTags(outfit);
+  const isDirty = name.trim() !== (outfit.name || "").trim()
+    || JSON.stringify(normalizeDetailTags(tags)) !== JSON.stringify(normalizeDetailTags(savedTags));
 
   useEffect(() => {
     setName(outfit.name || "");
+    setTags(outfitDetailTags(outfit));
     setSaveError("");
     setZoomImage((current) => {
       if (!current) return null;
@@ -678,39 +758,44 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     });
   }, [outfit.id]);
 
-  const persistName = useCallback(async () => {
+  const persistOutfit = useCallback(async () => {
     const nextName = name.trim();
+    const nextTags = normalizeDetailTags(tags);
     if (!nextName) {
       setSaveError("Outfit name cannot be empty.");
       setName(outfit.name || "");
       return false;
     }
-    if (nextName === (outfit.name || "").trim()) return true;
+    const nameUnchanged = nextName === (outfit.name || "").trim();
+    const tagsUnchanged = JSON.stringify(nextTags) === JSON.stringify(normalizeDetailTags(savedTags));
+    if (nameUnchanged && tagsUnchanged) return true;
     setSaving(true);
     setSaveError("");
     try {
-      await onSave(outfit.id, nextName);
+      await onSave(outfit.id, { name: nextName, tags: nextTags });
+      setName(nextName);
+      setTags(nextTags);
       return true;
     } catch (error) {
-      setSaveError(error.message || "Could not save the outfit name.");
+      setSaveError(error.message || "Could not save the outfit.");
       return false;
     } finally {
       setSaving(false);
     }
-  }, [name, onSave, outfit.id, outfit.name]);
+  }, [name, onSave, outfit.id, outfit.name, savedTags, tags]);
 
   useEffect(() => {
     if (!isDirty) return undefined;
     const timer = setTimeout(() => {
-      void persistName();
+      void persistOutfit();
     }, AUTOSAVE_MS);
     return () => clearTimeout(timer);
-  }, [isDirty, name, persistName]);
+  }, [isDirty, name, persistOutfit, tags]);
 
   const flushAndRun = useCallback(async (action) => {
-    if (isDirty) await persistName();
+    if (isDirty) await persistOutfit();
     action?.();
-  }, [isDirty, persistName]);
+  }, [isDirty, persistOutfit]);
 
   const requestClose = useCallback(() => {
     void flushAndRun(onClose);
@@ -810,15 +895,13 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
               />
             </label>
 
+            <div className="field details-field">
+              <span>Details</span>
+              <TagEditor tags={tags} onChange={setTags} />
+            </div>
+
             {outfit.status === "failed" && (
               <p className="outfit-viewer-error" role="alert">{outfit.error || "Generation failed"}</p>
-            )}
-
-            {outfit.prompt && (
-              <p className="outfit-viewer-prompt">
-                <span>Details</span>
-                {outfit.prompt}
-              </p>
             )}
 
             <div className="outfit-viewer-garments">
@@ -886,7 +969,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   );
 }
 
-function TagEditor({ tags, onChange }) {
+function TagEditor({ tags, onChange, compact = false }) {
   const [input, setInput] = useState("");
 
   const addTag = () => {
@@ -897,17 +980,19 @@ function TagEditor({ tags, onChange }) {
   };
 
   return (
-    <div className="tag-editor">
-      <div className="editable-tags">
-        {tags.map((tag) => (
-          <span className="editable-tag" key={tag}>
-            {tag}
-            <button type="button" onClick={() => onChange(tags.filter((existing) => existing !== tag))} aria-label={`Remove ${tag}`}>
-              <X size={12} weight="regular" aria-hidden="true" />
-            </button>
-          </span>
-        ))}
-      </div>
+    <div className={`tag-editor${compact ? " is-compact" : ""}`}>
+      {tags.length > 0 && (
+        <div className="editable-tags">
+          {tags.map((tag) => (
+            <span className="editable-tag" key={tag}>
+              {tag}
+              <button type="button" onClick={() => onChange(tags.filter((existing) => existing !== tag))} aria-label={`Remove ${tag}`}>
+                <X size={12} weight="regular" aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="tag-input-row">
         <input
           value={input}
@@ -918,7 +1003,7 @@ function TagEditor({ tags, onChange }) {
               addTag();
             }
           }}
-          placeholder="Add a detail"
+          placeholder={compact ? "e.g. tucked shirt, evening" : "Add a detail"}
           aria-label="Add detail tag"
         />
         <button type="button" onClick={addTag} disabled={!input.trim()} aria-label="Add detail">
@@ -1069,7 +1154,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
   const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
-  const [refreshingGeneration, setRefreshingGeneration] = useState(false);
   const [confirmKind, setConfirmKind] = useState(null);
   const [regenPrompt, setRegenPrompt] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
@@ -1081,7 +1165,17 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const garmentStatus = item.garmentGeneration?.status || null;
   const garmentBusy = garmentStatus === "processing";
   const garmentError = garmentStatus === "failed" ? item.garmentGeneration.error : "";
-  const generationBusy = modeledBusy || garmentBusy;
+
+  useEffect(() => {
+    if (!modeledBusy) return;
+    setZoomImage((current) => (current?.kind === "modeled" ? null : current));
+  }, [modeledBusy]);
+
+  useEffect(() => {
+    if (!garmentBusy) return;
+    setSampling(null);
+    setZoomImage((current) => (current?.kind === "garment" ? null : current));
+  }, [garmentBusy]);
   const pieceRotation = useMemo(() => {
     const hash = [...item.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     return `${(hash % 9) - 4}deg`;
@@ -1179,7 +1273,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     setSampleStatus("");
     setPalette(item.palette || []);
     setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
-    setRefreshingGeneration(false);
     setConfirmKind(null);
     setRegenPrompt("");
     setZoomImage((current) => {
@@ -1259,28 +1352,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     else if (kind === "modeled") await generateModeledPhoto(prompt);
   };
 
-  const refreshGenerationStatus = async () => {
-    setRefreshingGeneration(true);
-    try {
-      const response = await fetch(`/api/import/wardrobe/${item.id}`, { cache: "no-store" });
-      const value = await response.json().catch(() => ({}));
-      if (response.ok) {
-        onGenerateModeled(item.id, {
-          image: value.image ?? item.image,
-          thumbnail: value.thumbnail ?? item.thumbnail,
-          modeledImage: value.modeledImage,
-          modeledGeneration: value.modeledGeneration ?? null,
-          garmentGeneration: value.garmentGeneration ?? null,
-          costs: value.costs ?? item.costs,
-        });
-      }
-    } catch {
-      // Transient network hiccups shouldn't surface as an error—just try again later.
-    } finally {
-      setRefreshingGeneration(false);
-    }
-  };
-
   const handleImageLoad = (event) => {
     samplingCanvasRef.current = buildSamplingCanvas(event.currentTarget);
     const extracted = extractPalette(event.currentTarget);
@@ -1304,30 +1375,37 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     setZoomImage({ kind: "garment", src: item.image, alt: draft.name || type });
   };
 
+  const showModeledHero = hasModeledImage || modeledBusy;
   const garmentArtwork = (
     <div
-      className={`viewer-art${hasModeledImage ? " viewer-art-floating" : ""}${sampling ? " sampling" : " image-zoom-trigger"}`}
-      style={hasModeledImage ? { "--piece-rotation": pieceRotation } : undefined}
+      className={`viewer-art${showModeledHero ? " viewer-art-floating" : ""}${garmentBusy ? " is-generating" : ""}${!garmentBusy && sampling ? " sampling" : !garmentBusy ? " image-zoom-trigger" : ""}`}
+      style={showModeledHero ? { "--piece-rotation": pieceRotation } : undefined}
+      role={garmentBusy ? "status" : undefined}
+      aria-label={garmentBusy ? "Regenerating garment" : undefined}
     >
-      <OptimizedImage
-        ref={imageRef}
-        src={item.image}
-        alt={`Selected ${type.toLowerCase()}`}
-        draggable={false}
-        sizes="(max-width: 520px) 40vw, 300px"
-        breakpoints={[160, 240, 320, 480, 640]}
-        priority
-        onLoad={handleImageLoad}
-        onClick={handleImageClick}
-      />
-      {sampling && <span className="sample-hint">Click garment to sample</span>}
+      {garmentBusy ? (
+        <span className="viewer-art-rainbow" aria-hidden="true" />
+      ) : (
+        <OptimizedImage
+          ref={imageRef}
+          src={item.image}
+          alt={`Selected ${type.toLowerCase()}`}
+          draggable={false}
+          sizes="(max-width: 520px) 40vw, 300px"
+          breakpoints={[160, 240, 320, 480, 640]}
+          priority
+          onLoad={handleImageLoad}
+          onClick={handleImageClick}
+        />
+      )}
+      {!garmentBusy && sampling && <span className="sample-hint">Click garment to sample</span>}
     </div>
   );
 
   return (
     <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
     <div className="viewer-entry">
-    <aside className={`viewer editing${hasModeledImage ? " has-modeled-image" : ""}`} role="dialog" aria-modal="true" aria-label="Selected wardrobe item">
+    <aside className={`viewer editing${hasModeledImage || modeledBusy ? " has-modeled-image" : ""}`} role="dialog" aria-modal="true" aria-label="Selected wardrobe item">
       {onBackToOutfit && (
         <button className="viewer-back-button" type="button" onClick={requestBack}>
           <ArrowLeft size={16} weight="bold" aria-hidden="true" />
@@ -1339,25 +1417,31 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       </button>
       <ViewerNavArrows onNavigate={requestNavigate} label="garment" canPrev={canPrev} canNext={canNext} />
 
-      {hasModeledImage ? (
-        <div className="modeled-hero">
-          <button
-            className="modeled-hero-zoom image-zoom-trigger"
-            type="button"
-            onClick={() => setZoomImage({ kind: "modeled", src: item.modeledImage, alt: `${draft.name || type} worn by a model` })}
-            aria-label="View larger modeled photo"
-          >
-            <OptimizedImage
-              className="modeled-hero-photo"
-              src={item.modeledImage}
-              alt={`${draft.name || type} worn by a model`}
-              draggable={false}
-              sizes="(max-width: 860px) 100vw, 520px"
-              breakpoints={[320, 480, 640, 800, 1040, 1280]}
-              quality={82}
-              priority
-            />
-          </button>
+      {showModeledHero ? (
+        <div className={`modeled-hero${modeledBusy ? " is-generating" : ""}`}>
+          {modeledBusy ? (
+            <div className="modeled-hero-loading" role="status" aria-label="Generating modeled photo">
+              <span className="modeled-hero-rainbow" aria-hidden="true" />
+            </div>
+          ) : (
+            <button
+              className="modeled-hero-zoom image-zoom-trigger"
+              type="button"
+              onClick={() => setZoomImage({ kind: "modeled", src: item.modeledImage, alt: `${draft.name || type} worn by a model` })}
+              aria-label="View larger modeled photo"
+            >
+              <OptimizedImage
+                className="modeled-hero-photo"
+                src={item.modeledImage}
+                alt={`${draft.name || type} worn by a model`}
+                draggable={false}
+                sizes="(max-width: 860px) 100vw, 520px"
+                breakpoints={[320, 480, 640, 800, 1040, 1280]}
+                quality={82}
+                priority
+              />
+            </button>
+          )}
           {garmentArtwork}
         </div>
       ) : (
@@ -1374,29 +1458,14 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
       <div className="modeled-photo-control">
         <div className="modeled-photo-row">
-          {generationBusy ? (
-            <button className="secondary-button modeled-photo-refresh" type="button" onClick={refreshGenerationStatus} disabled={refreshingGeneration}>
-              {refreshingGeneration ? <SpinnerGap size={15} weight="bold" className="import-spinner" aria-hidden="true" /> : <ArrowClockwise size={15} weight="regular" aria-hidden="true" />}
-              {refreshingGeneration
-                ? "Checking…"
-                : garmentBusy && modeledBusy
-                  ? "Check status"
-                  : garmentBusy
-                    ? "Check garment status"
-                    : "Check modeled status"}
-            </button>
-          ) : (
-            <>
-              <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("garment")} disabled={garmentBusy}>
-                <ArrowClockwise size={15} weight="regular" aria-hidden="true" />
-                Regenerate garment
-              </button>
-              <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("modeled")}>
-                <Sparkle size={15} weight="regular" aria-hidden="true" />
-                {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
-              </button>
-            </>
-          )}
+          <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("garment")} disabled={garmentBusy}>
+            <ArrowClockwise size={15} weight="regular" aria-hidden="true" />
+            Regenerate garment
+          </button>
+          <button className="secondary-button modeled-photo-button" type="button" onClick={() => openConfirm("modeled")} disabled={modeledBusy}>
+            <Sparkle size={15} weight="regular" aria-hidden="true" />
+            {hasModeledImage ? "Regenerate modeled photo" : "Generate modeled photo"}
+          </button>
         </div>
         {garmentBusy && <p className="modeled-photo-status" role="status">Regenerating the garment in the background—this can take up to a minute.</p>}
         {modeledBusy && <p className="modeled-photo-status" role="status">Generating the modeled photo in the background—this can take up to a minute.</p>}
@@ -1466,7 +1535,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       )}
 
       <div className="viewer-details editing">
-        {hasModeledImage && (
+        {(hasModeledImage || modeledBusy) && (
           <div className="viewer-heading modeled-heading">
             <div className="viewer-heading-title">
               <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
@@ -1511,6 +1580,7 @@ export function App() {
   const [items, setItems] = useState([]);
   const [libraryTab, setLibraryTab] = useState("garments");
   const [activeType, setActiveType] = useState("all");
+  const [garmentTileSize, setGarmentTileSize] = useState(readGarmentTileSize);
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery.trim());
   const [selectedId, setSelectedId] = useState(null);
@@ -1642,6 +1712,15 @@ export function App() {
     setLibraryTab((current) => (current === tab ? current : tab));
   }, []);
 
+  const chooseGarmentTileSize = useCallback((size) => {
+    setGarmentTileSize(size);
+    try {
+      localStorage.setItem(TILE_SIZE_STORAGE_KEY, size);
+    } catch {
+      // Ignore storage failures; the in-session preference still applies.
+    }
+  }, []);
+
   const openGarmentFromOutfit = useCallback((garmentId) => {
     setReturnOutfitId(selectedOutfitId);
     setSelectedOutfitId(null);
@@ -1680,7 +1759,7 @@ export function App() {
       return {
         id: outfit.id,
         name: outfit.name || "",
-        prompt: outfit.prompt || "",
+        tags: outfitDetailTags(outfit),
         setting: outfit.setting || "",
         garmentNames: garments.map((garment) => garment.name).filter(Boolean),
         garmentTags: garments.flatMap((garment) => garment.tags || []),
@@ -1811,14 +1890,14 @@ export function App() {
     setSelectedOutfitId(null);
   }, []);
 
-  const saveOutfitName = useCallback(async (id, name) => {
+  const saveOutfit = useCallback(async (id, { name, tags }) => {
     const response = await fetch(`/api/import/outfits/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, tags }),
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "Could not save the outfit name.");
+    if (!response.ok) throw new Error(result.error || "Could not save the outfit.");
     setOutfits((current) => current.map((outfit) => (outfit.id === id ? { ...outfit, ...result } : outfit)));
   }, []);
 
@@ -1973,7 +2052,7 @@ export function App() {
           <GallerySearch
             value={searchQuery}
             onChange={setSearchQuery}
-            placeholder={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
+            placeholder={libraryTab === "outfits" ? "Search name or details" : "Search name or details"}
             label={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
           />
         </div>
@@ -2021,11 +2100,16 @@ export function App() {
             {loading && libraryTab === "garments" ? (
               <span className="piece-count-skeleton" aria-hidden="true" />
             ) : (
-              <p className="piece-count">
-                {libraryTab === "outfits"
-                  ? `${totalOutfitCount} ${totalOutfitCount === 1 ? "look" : "looks"}`
-                  : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`}
-              </p>
+              <div className="gallery-meta-actions">
+                {libraryTab === "garments" && (
+                  <GarmentTileSizeToggle value={garmentTileSize} onChange={chooseGarmentTileSize} />
+                )}
+                <p className="piece-count">
+                  {libraryTab === "outfits"
+                    ? `${totalOutfitCount} ${totalOutfitCount === 1 ? "look" : "looks"}`
+                    : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`}
+                </p>
+              </div>
             )}
           </div>
           <nav
@@ -2070,6 +2154,7 @@ export function App() {
             onOpen={openItem}
             activeType={activeType}
             searching={Boolean(deferredSearchQuery)}
+            tileSize={garmentTileSize}
           />
         </div>
 
@@ -2105,7 +2190,7 @@ export function App() {
           garments={selectedOutfitGarments}
           onClose={() => setSelectedOutfitId(null)}
           onDelete={requestDeleteOutfit}
-          onSave={saveOutfitName}
+          onSave={saveOutfit}
           onOpenGarment={openGarmentFromOutfit}
           onNavigate={navigateOutfit}
           canPrev={outfitNavBounds.canPrev}

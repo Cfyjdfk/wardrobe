@@ -15,7 +15,11 @@
 
 * { box-sizing: border-box; }
 
-html { background: var(--paper); }
+html {
+  background: var(--paper);
+  /* Keep scrollbar space reserved so opening the drawer doesn't reflow the grid. */
+  scrollbar-gutter: stable;
+}
 
 body {
   margin: 0;
@@ -26,13 +30,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Lock scroll without hiding the scrollbar (avoids horizontal layout jump). */
+/* Lock scroll without introducing a second scrollbar (that shrinks content width). */
 body.viewer-open {
   position: fixed;
   left: 0;
   right: 0;
   width: 100%;
-  overflow-y: scroll;
+  overflow: hidden;
 }
 
 button { font: inherit; }
@@ -486,14 +490,14 @@ button { font: inherit; }
 }
 
 .outfits-section {
-  padding: 43px 52px 70px;
+  padding: 36px 40px 80px;
 }
 
 .outfits-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   align-items: start;
-  gap: 28px 24px;
+  gap: 22px 18px;
 }
 
 .outfit-card {
@@ -501,9 +505,8 @@ button { font: inherit; }
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: flex-start;
   width: 100%;
-  border: 1px solid transparent;
+  border: 0;
   padding: 0;
   background: transparent;
   color: inherit;
@@ -515,14 +518,20 @@ button { font: inherit; }
   cursor: default;
 }
 
-.outfit-card:not(:disabled):hover img,
-.outfit-card:not(:disabled):focus-visible img {
+.outfit-card-media {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(25, 25, 25, .04);
+}
+
+.outfit-card:not(:disabled):focus-visible .outfit-card-media {
   outline: 1px solid var(--ink);
   outline-offset: 3px;
 }
 
-.outfit-card.selected {
-  border-color: var(--accent);
+.outfit-card.selected .outfit-card-media {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 .outfit-card img {
@@ -530,7 +539,6 @@ button { font: inherit; }
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
-  background: rgba(25, 25, 25, .04);
   -webkit-user-drag: none;
   user-select: none;
 }
@@ -543,7 +551,8 @@ button { font: inherit; }
   justify-content: center;
   gap: 10px;
   border: 1px solid var(--line);
-  padding: 16px;
+  border-radius: 18px;
+  padding: 18px;
   color: var(--muted);
   font-size: 11px;
   letter-spacing: .06em;
@@ -554,10 +563,15 @@ button { font: inherit; }
 .outfit-card.is-failed .outfit-card-placeholder { color: var(--accent); }
 
 .outfit-card-name {
-  margin: 12px 0 0;
-  font-size: 12px;
-  letter-spacing: .03em;
-  color: var(--muted);
+  margin: 10px 4px 0;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: .01em;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .viewer.has-outfit-image .outfit-hero {
@@ -627,21 +641,6 @@ button { font: inherit; }
   margin: 0 0 18px;
   color: var(--accent);
   font-size: 13px;
-}
-
-.outfit-viewer-prompt {
-  margin: 0 0 22px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.outfit-viewer-prompt span {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 11px;
-  letter-spacing: .1em;
-  text-transform: uppercase;
 }
 
 .outfit-viewer-garments .details-label {
@@ -720,6 +719,77 @@ button { font: inherit; }
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+}
+
+.gallery-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.tile-size-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 88%, #fff);
+}
+
+.tile-size-toggle button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tile-size-toggle button:hover,
+.tile-size-toggle button:focus-visible {
+  color: var(--ink);
+  background: rgba(25, 25, 25, .06);
+  outline: none;
+}
+
+.tile-size-toggle button.active {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.tile-size-icon {
+  display: grid;
+  gap: 1.5px;
+  width: 14px;
+  height: 14px;
+}
+
+.tile-size-icon i {
+  display: block;
+  background: currentColor;
+  border-radius: 0.5px;
+}
+
+.tile-size-icon--small {
+  width: 12px;
+  height: 12px;
+  gap: 1px;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+
+.tile-size-icon--medium {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+.tile-size-icon--large {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
 }
 
 .library-tabs {
@@ -902,6 +972,21 @@ button { font: inherit; }
   grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
   gap: 22px 26px;
   padding: 43px 52px 70px;
+}
+
+.gallery-grid--small {
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: 18px 20px;
+}
+
+.gallery-grid--medium {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 24px 28px;
+}
+
+.gallery-grid--large {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 28px 32px;
 }
 
 .gallery-skeleton-item {
@@ -1208,6 +1293,37 @@ button { font: inherit; }
   object-fit: contain;
 }
 
+.viewer-art-rainbow {
+  display: block;
+  width: 72%;
+  max-width: 220px;
+  height: 78%;
+  min-height: 120px;
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      125deg,
+      #f2b8c6 0%,
+      #f0d4a8 22%,
+      #e8e4a8 40%,
+      #b8dfc8 58%,
+      #a8c8e8 76%,
+      #c8b8e8 100%
+    );
+  background-size: 220% 220%;
+  opacity: .72;
+  transform-origin: center center;
+  animation: modeled-hero-rainbow 2.4s ease-in-out infinite;
+}
+
+.viewer-art.viewer-art-floating .viewer-art-rainbow {
+  width: 88%;
+  height: 100%;
+  max-width: none;
+  min-height: 0;
+  border-radius: 12px;
+}
+
 .viewer-art.sampling img {
   cursor: crosshair;
   outline: 1px solid var(--accent);
@@ -1276,7 +1392,7 @@ button { font: inherit; }
 .viewer-details.editing { padding-top: 8px; }
 
 .has-modeled-image .viewer-details.editing {
-  padding: 12px 34px 46px;
+  padding: 22px 34px 46px;
 }
 
 .details-label {
@@ -1326,7 +1442,23 @@ button { font: inherit; }
 }
 
 .modeled-photo-button { flex: 1; }
-.modeled-photo-refresh { flex: 1; }
+
+.secondary-button:disabled,
+.modeled-photo-button:disabled {
+  border-color: color-mix(in srgb, var(--line) 70%, var(--paper));
+  background: color-mix(in srgb, var(--line) 28%, var(--paper));
+  color: color-mix(in srgb, var(--muted) 55%, var(--paper));
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.secondary-button:disabled:hover,
+.secondary-button:disabled:focus-visible,
+.modeled-photo-button:disabled:hover,
+.modeled-photo-button:disabled:focus-visible {
+  border-color: color-mix(in srgb, var(--line) 70%, var(--paper));
+  outline: none;
+}
 
 .modeled-photo-status {
   margin: 10px 0 0;
@@ -1433,6 +1565,49 @@ button.modeled-hero-zoom {
 .modeled-hero-zoom .modeled-hero-photo {
   inset: 0;
   height: 100%;
+}
+
+.modeled-hero-loading {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  height: 370px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--paper) 88%, #fff);
+}
+
+.modeled-hero-rainbow {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(
+      125deg,
+      #f2b8c6 0%,
+      #f0d4a8 22%,
+      #e8e4a8 40%,
+      #b8dfc8 58%,
+      #a8c8e8 76%,
+      #c8b8e8 100%
+    );
+  background-size: 220% 220%;
+  opacity: .72;
+  animation: modeled-hero-rainbow 2.4s ease-in-out infinite;
+}
+
+@keyframes modeled-hero-rainbow {
+  0%, 100% {
+    opacity: .42;
+    background-position: 0% 40%;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .88;
+    background-position: 100% 60%;
+    transform: scale(1.04);
+  }
 }
 
 .image-zoom-lightbox {
@@ -1821,9 +1996,14 @@ button.modeled-hero-zoom {
   padding: 0;
 }
 
-.field.outfit-name-field {
+.field.outfit-name-field,
+.viewer-details .details-field {
   display: block;
   margin: 0 0 28px;
+}
+
+.outfit-viewer-garments {
+  margin-top: 4px;
 }
 
 .field > span,
@@ -2112,6 +2292,12 @@ button.modeled-hero-zoom {
   .gallery-grid,
   .outfits-section { padding-inline: 32px; }
   .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap-inline: 18px; }
+  .gallery-grid--small { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap-inline: 16px; }
+  .gallery-grid--medium { grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); gap-inline: 20px; }
+  .gallery-grid--large { grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap-inline: 24px; }
+  .outfits-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px 14px; }
+  .outfit-card-media,
+  .outfit-card-placeholder { border-radius: 16px; }
   .category-nav { max-width: 100%; }
   .viewer { padding-inline: 30px; }
   .has-modeled-image .viewer-details.editing { padding-inline: 30px; }
@@ -2133,8 +2319,20 @@ button.modeled-hero-zoom {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 18px 14px;
   }
-  .outfits-grid {
+  .gallery-grid--small {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 12px;
+  }
+  .gallery-grid--medium {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 16px;
+  }
+  .gallery-grid--large {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 18px;
+  }
+  .outfits-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 18px 14px;
   }
   .gallery-item { padding: 5px; }
@@ -2148,7 +2346,7 @@ button.modeled-hero-zoom {
   .viewer-heading { padding-top: 0; }
   .viewer-icon-close { top: 18px; right: 18px; }
   .has-modeled-image .viewer-icon-close { top: 20px; right: 20px; }
-  .has-modeled-image .viewer-details.editing { padding: 14px 30px 38px; }
+  .has-modeled-image .viewer-details.editing { padding: 20px 30px 38px; }
   .viewer-art { flex-basis: min(32vh, 300px); height: min(32vh, 300px); min-height: 210px; }
   .viewer-art.viewer-art-floating { flex-basis: auto; width: 36%; height: 178px; min-height: 0; }
   .item-editor { grid-template-columns: 1fr; }
@@ -2229,16 +2427,32 @@ button.modeled-hero-zoom {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px 8px;
   }
+  .gallery-grid--small {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 8px;
+  }
+  .gallery-grid--medium {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 10px;
+  }
+  .gallery-grid--large {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
   .outfits-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px 10px;
   }
+  .outfit-card-media,
+  .outfit-card-placeholder { border-radius: 14px; }
+  .outfit-card-name { font-size: 12px; margin-top: 8px; }
   .gallery-item,
   .gallery-skeleton-item { aspect-ratio: .72; }
   .viewer { padding: max(24px, env(safe-area-inset-top)) 22px max(28px, env(safe-area-inset-bottom)); }
   .modeled-hero { flex-basis: 340px; height: 340px; }
   .modeled-hero-photo { height: 326px; object-position: 49% 43%; }
   .modeled-hero-zoom { height: 326px; }
+  .modeled-hero-loading { height: 326px; }
   .modeled-hero::after { height: 112px; }
   .viewer.has-outfit-image .outfit-hero {
     flex-basis: auto;
@@ -2258,7 +2472,7 @@ button.modeled-hero-zoom {
   .viewer-heading.has-back { padding-top: 52px; }
   .viewer-art.viewer-art-floating { right: 4px; bottom: -28px; left: auto; top: auto; flex-basis: auto; width: 40%; height: 158px; min-height: 0; padding: 0; }
   .has-modeled-image .modeled-photo-control { margin-top: 22px; }
-  .has-modeled-image .viewer-details.editing { padding: 12px 22px 30px; }
+  .has-modeled-image .viewer-details.editing { padding: 18px 22px 30px; }
   .viewer-heading { padding-top: 0; }
   .viewer-art { flex-basis: min(30vh, 260px); height: min(30vh, 260px); min-height: 190px; padding-block: 10px 8px; }
   .viewer-details { padding-top: 10px; }
@@ -2283,7 +2497,9 @@ button.modeled-hero-zoom {
   .viewer-entry,
   .image-zoom-lightbox,
   .gallery-skeleton-item,
-  .piece-count-skeleton { animation: none; }
+  .piece-count-skeleton,
+  .modeled-hero-rainbow,
+  .viewer-art-rainbow { animation: none; }
   .image-zoom-lightbox__frame img { transition: none; }
   .viewer.shake {
     animation: none;

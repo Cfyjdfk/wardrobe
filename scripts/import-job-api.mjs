@@ -69,6 +69,33 @@ function decodeImage(input) {
   return { data, mime };
 }
 
+function normalizeTags(value) {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+  const seen = new Set();
+  const tags = [];
+  for (const entry of source) {
+    if (typeof entry !== "string") continue;
+    const tag = entry.trim().replace(/^#/, "").toLowerCase().slice(0, 40);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    tags.push(tag);
+    if (tags.length >= 12) break;
+  }
+  return tags;
+}
+
+function resolveOutfitTags(outfit = {}) {
+  return Array.isArray(outfit.tags) ? normalizeTags(outfit.tags) : [];
+}
+
+function outfitGenerationDirection(outfit = {}) {
+  return typeof outfit.prompt === "string" ? outfit.prompt.trim() : "";
+}
+
 function normalizeMetadata(value = {}) {
   const metadata = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const color = typeof metadata.color === "string" && HEX_COLOR.test(metadata.color) ? metadata.color.toLowerCase() : "#d8d0c2";
@@ -78,7 +105,8 @@ function normalizeMetadata(value = {}) {
     part: PARTS.has(metadata.part) ? metadata.part : "upperbody",
     color,
     secondaryColor,
-    tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12) : [],
+    tags: normalizeTags(metadata.tags),
+    owned: metadata.owned !== false,
     boundingBox: normalizeBoundingBox(metadata.boundingBox),
   };
 }
@@ -553,6 +581,7 @@ export function wardrobeImportApi(options = {}) {
       secondaryColor: metadata.secondaryColor || null,
       palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
       tags: Array.isArray(metadata.tags) ? metadata.tags : [],
+      owned: metadata.owned !== false,
       image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
       thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
       modeledImage: modeledImage || existing?.modeledImage || null,
@@ -770,7 +799,7 @@ export function wardrobeImportApi(options = {}) {
     const prompt = options.outfitPrompt || buildOutfitPrompt(ordered, {
       name: outfit.name,
       setting: outfit.setting || DEFAULT_OUTFIT_SETTING,
-      prompt: outfit.prompt || "",
+      prompt: outfitGenerationDirection(outfit),
     });
     return openAIEdit({
       key,
@@ -918,7 +947,12 @@ export function wardrobeImportApi(options = {}) {
       }
       if (url.pathname === "/api/import/outfits" && req.method === "GET") {
         const document = await loadOutfitsDocument();
-        const outfits = [...document.outfits].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        const outfits = [...document.outfits]
+          .map((outfit) => ({
+            ...outfit,
+            tags: resolveOutfitTags(outfit),
+          }))
+          .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
         return json(res, 200, outfits);
       }
       if (url.pathname === "/api/import/outfits" && req.method === "POST") {
@@ -962,13 +996,15 @@ export function wardrobeImportApi(options = {}) {
         const id = `outfit-${randomUUID()}`;
         const name = outfitNameFromGarments(ordered);
         const createdAt = new Date().toISOString();
-        const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) : "";
+        const tags = input.tags !== undefined ? normalizeTags(input.tags) : [];
+        const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) || null : null;
         const outfit = {
           id,
           name,
           garmentIds: ordered.map((item) => item.id),
           setting: DEFAULT_OUTFIT_SETTING,
-          prompt: prompt || null,
+          tags,
+          prompt,
           image: null,
           status: "processing",
           error: null,
@@ -986,7 +1022,13 @@ export function wardrobeImportApi(options = {}) {
         if (typeof input.name !== "string") return json(res, 400, { error: "name is required." });
         const name = input.name.trim().slice(0, 120);
         if (!name) return json(res, 400, { error: "Outfit name cannot be empty." });
-        const updated = await updateOutfitRecord(id, (current) => ({ ...current, name }));
+        const hasTags = input.tags !== undefined;
+        const tags = hasTags ? normalizeTags(input.tags) : null;
+        const updated = await updateOutfitRecord(id, (current) => ({
+          ...current,
+          name,
+          ...(hasTags ? { tags } : {}),
+        }));
         if (!updated) return json(res, 404, { error: "Outfit not found" });
         return json(res, 200, updated);
       }
