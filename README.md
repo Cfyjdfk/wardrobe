@@ -62,7 +62,7 @@ If you are setting up Wardrobe for a user, ask how they want to import their clo
 | `OPENAI_API_KEY` | Required |
 | `OPENAI_VISION_MODEL` | `gpt-5.4-mini` |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-2` |
-| `OPENAI_IMAGE_QUALITY` | `high` |
+| `OPENAI_IMAGE_QUALITY` | `medium` |
 | `WARDROBE_MODEL_REFERENCE` | `data/model-reference.png` |
 | `WARDROBE_DATA_DIR` | `data` |
 

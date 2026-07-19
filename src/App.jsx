@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
@@ -70,6 +70,152 @@ function arrowNavigationDelta(key) {
   if (key === "ArrowLeft" || key === "ArrowUp") return -1;
   if (key === "ArrowRight" || key === "ArrowDown") return 1;
   return 0;
+}
+
+function formatTokenCount(count) {
+  if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return null;
+  return `${Math.round(count).toLocaleString()}`;
+}
+
+function formatUsd(amount) {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) return null;
+  if (amount < 0.01) return `~$${amount.toFixed(3)}`;
+  return `~$${amount.toFixed(2)}`;
+}
+
+function costMetaFromRecord(cost, label) {
+  if (!cost) return null;
+  const tokens = formatTokenCount(cost.totalTokens);
+  const usd = formatUsd(cost.estimatedUsd);
+  if (!tokens && !usd) return null;
+  return {
+    label,
+    tokens,
+    usd,
+    title: cost.model ? `Model ${cost.model}` : undefined,
+  };
+}
+
+function tokenMetaEntries(costs, singleCost) {
+  if (singleCost) return [costMetaFromRecord(singleCost, null)].filter(Boolean);
+  if (!costs) return [];
+  return [
+    costMetaFromRecord(costs.garment, "Garment"),
+    costMetaFromRecord(costs.modeled, "Modeled image"),
+  ].filter(Boolean);
+}
+
+function GenerationCostMeta({ costs, singleCost }) {
+  const entries = tokenMetaEntries(costs, singleCost);
+  if (!entries.length) return null;
+  const isOutfit = Boolean(singleCost);
+  return (
+    <p className="generation-cost" aria-label="Generation cost">
+      {isOutfit && <span className="generation-cost-label">Estimated cost</span>}
+      {entries.map((entry) => (
+        <span className="generation-cost-item" key={entry.label || "outfit"} title={entry.title}>
+          {entry.label && <span className="generation-cost-label">{entry.label}</span>}
+          {entry.usd && <span className="generation-cost-usd">{entry.usd}</span>}
+          {entry.usd && entry.tokens && <span className="generation-cost-sep" aria-hidden="true">·</span>}
+          {entry.tokens && <span className="generation-cost-tokens">{entry.tokens}</span>}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function ImageZoomLightbox({ src, alt, onClose, onNavigate, canPrev = false, canNext = false, label = "item" }) {
+  const scrollerRef = useRef(null);
+  const frameRef = useRef(null);
+  const pendingFocusRef = useRef(null);
+  const [zoomed, setZoomed] = useState(false);
+
+  useEffect(() => {
+    setZoomed(false);
+    if (scrollerRef.current) {
+      scrollerRef.current.scrollLeft = 0;
+      scrollerRef.current.scrollTop = 0;
+    }
+  }, [src]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      const delta = arrowNavigationDelta(event.key);
+      if (!delta || !onNavigate) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onNavigate(delta);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose, onNavigate]);
+
+  useLayoutEffect(() => {
+    if (!zoomed || !pendingFocusRef.current || !scrollerRef.current || !frameRef.current) return;
+    const { x, y } = pendingFocusRef.current;
+    pendingFocusRef.current = null;
+    const scroller = scrollerRef.current;
+    const frame = frameRef.current;
+    scroller.scrollLeft = Math.max(0, frame.offsetWidth * x - scroller.clientWidth / 2);
+    scroller.scrollTop = Math.max(0, frame.offsetHeight * y - scroller.clientHeight / 2);
+  }, [zoomed]);
+
+  const toggleZoom = (event) => {
+    if (zoomed) {
+      if (scrollerRef.current) {
+        scrollerRef.current.scrollLeft = 0;
+        scrollerRef.current.scrollTop = 0;
+      }
+      setZoomed(false);
+      return;
+    }
+    const image = event.currentTarget.querySelector("img");
+    const rect = (image || event.currentTarget).getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      setZoomed(true);
+      return;
+    }
+    pendingFocusRef.current = {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+    setZoomed(true);
+  };
+
+  if (!src) return null;
+
+  return (
+    <div
+      ref={scrollerRef}
+      className={`image-zoom-lightbox${zoomed ? " is-zoomed" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt || "Zoomed image"}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <button className="image-zoom-lightbox__close" type="button" onClick={onClose} aria-label="Close zoomed image">
+        <X size={24} weight="light" aria-hidden="true" />
+      </button>
+      <ViewerNavArrows onNavigate={onNavigate} label={label} canPrev={canPrev} canNext={canNext} />
+      <button
+        ref={frameRef}
+        className={`image-zoom-lightbox__frame${zoomed ? " is-zoomed" : ""}`}
+        type="button"
+        onClick={toggleZoom}
+        aria-label={zoomed ? "Minimize image" : "Zoom image"}
+      >
+        <img src={src} alt={alt || ""} />
+      </button>
+    </div>
+  );
 }
 
 function isTypingTarget(target) {
@@ -252,6 +398,11 @@ function GalleryItem({ item, selected, onOpen }) {
         event.dataTransfer.setData(GARMENT_DRAG_MIME, item.id);
         event.dataTransfer.setData("text/plain", item.id);
         event.dataTransfer.effectAllowed = "copy";
+        const preview = event.currentTarget.querySelector("img");
+        if (preview) {
+          const rect = preview.getBoundingClientRect();
+          event.dataTransfer.setDragImage(preview, rect.width / 2, rect.height / 2);
+        }
       }}
       onDrag={(event) => {
         if (Math.abs(event.movementX) > 2 || Math.abs(event.movementY) > 2) dragMoved.current = true;
@@ -329,10 +480,10 @@ function GallerySearch({ value, onChange }) {
   );
 }
 
-function OutfitComposer({ items, prompt, onPromptChange, error, generating, onAdd, onRemove, onGenerate }) {
+function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate }) {
   const [draggingOver, setDraggingOver] = useState(false);
   const ordered = sortByPart(items);
-  const canGenerate = ordered.length >= 2 && !generating;
+  const canGenerate = ordered.length >= 2;
 
   const acceptDrop = (event) => {
     event.preventDefault();
@@ -408,7 +559,6 @@ function OutfitComposer({ items, prompt, onPromptChange, error, generating, onAd
                 onChange={(event) => onPromptChange(event.target.value)}
                 placeholder="e.g. tucked shirt, evening street"
                 maxLength={1200}
-                disabled={generating}
               />
             </label>
           )}
@@ -418,15 +568,15 @@ function OutfitComposer({ items, prompt, onPromptChange, error, generating, onAd
           {ordered.length > 0 && ordered.length < 2 && (
             <p className="outfit-composer-hint">Add at least one more garment</p>
           )}
-          {(ordered.length >= 2 || generating) && (
+          {ordered.length >= 2 && (
             <button
               className="outfit-generate-button"
               type="button"
               disabled={!canGenerate}
               onClick={onGenerate}
             >
-              {generating ? <SpinnerGap size={15} className="import-spinner" aria-hidden="true" /> : <Sparkle size={15} weight="fill" aria-hidden="true" />}
-              <span>{generating ? "Generating" : "Generate"}</span>
+              <Sparkle size={15} weight="fill" aria-hidden="true" />
+              <span>Generate</span>
             </button>
           )}
         </div>
@@ -437,22 +587,23 @@ function OutfitComposer({ items, prompt, onPromptChange, error, generating, onAd
 }
 
 function OutfitsSection({ outfits, selectedId, onOpen }) {
-  if (!outfits.length) return null;
+  const visible = outfits.filter((outfit) => outfit.status !== "processing");
+  if (!visible.length) return null;
 
   return (
     <section className="outfits-section" aria-label="Outfits">
       <header className="outfits-header">
         <h2 className="outfits-title">Outfits</h2>
-        <p className="outfits-count">{outfits.length} {outfits.length === 1 ? "look" : "looks"}</p>
+        <p className="outfits-count">{visible.length} {visible.length === 1 ? "look" : "looks"}</p>
       </header>
       <div className="outfits-grid">
-        {outfits.map((outfit) => {
+        {visible.map((outfit) => {
           const canOpen = outfit.status === "ready" || outfit.status === "failed";
           return (
             <button
               key={outfit.id}
               type="button"
-              className={`outfit-card${outfit.status === "processing" ? " is-processing" : ""}${outfit.status === "failed" ? " is-failed" : ""}${selectedId === outfit.id ? " selected" : ""}`}
+              className={`outfit-card${outfit.status === "failed" ? " is-failed" : ""}${selectedId === outfit.id ? " selected" : ""}`}
               data-testid={`outfit-${outfit.id}`}
               onClick={() => canOpen && onOpen(outfit.id)}
               disabled={!canOpen}
@@ -468,14 +619,7 @@ function OutfitsSection({ outfits, selectedId, onOpen }) {
                 />
               ) : (
                 <div className="outfit-card-placeholder" role="status">
-                  {outfit.status === "processing" ? (
-                    <>
-                      <SpinnerGap size={22} className="import-spinner" aria-hidden="true" />
-                      <span>Generating</span>
-                    </>
-                  ) : (
-                    <span>{outfit.error || "Generation failed"}</span>
-                  )}
+                  <span>{outfit.error || "Generation failed"}</span>
                 </div>
               )}
               {outfit.name && <p className="outfit-card-name">{outfit.name}</p>}
@@ -495,6 +639,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   const [saveError, setSaveError] = useState("");
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [zoomImage, setZoomImage] = useState(null);
   const hasImage = outfit.status === "ready" && Boolean(outfit.image);
   const orderedGarments = sortByPart(garments);
   const isDirty = name.trim() !== (outfit.name || "").trim();
@@ -503,6 +648,13 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     setName(outfit.name || "");
     setSaveError("");
     setCloseBlocked(false);
+    setZoomImage((current) => {
+      if (!current) return null;
+      if (outfit.status === "ready" && outfit.image) {
+        return { kind: "outfit", src: outfit.image, alt: outfit.name || "Outfit" };
+      }
+      return null;
+    });
   }, [outfit.id]);
 
   const nudgeUnsaved = useCallback(() => {
@@ -538,6 +690,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (zoomImage) return;
       if (event.key === "Escape") {
         if (isTypingTarget(event.target) && isDirty) return;
         if (isTypingTarget(event.target)) {
@@ -555,7 +708,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isDirty, requestClose, requestNavigate]);
+  }, [isDirty, requestClose, requestNavigate, zoomImage]);
 
   const cancelEditing = () => {
     setName(outfit.name || "");
@@ -598,7 +751,12 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
           <ViewerNavArrows onNavigate={requestNavigate} label="outfit" canPrev={canPrev} canNext={canNext} />
 
           {hasImage ? (
-            <div className="modeled-hero outfit-hero">
+            <button
+              className="modeled-hero outfit-hero image-zoom-trigger"
+              type="button"
+              onClick={() => setZoomImage({ kind: "outfit", src: outfit.image, alt: name.trim() || outfit.name || "Outfit" })}
+              aria-label="View larger outfit photo"
+            >
               <OptimizedImage
                 className="modeled-hero-photo"
                 src={outfit.image}
@@ -608,11 +766,12 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
                 quality={82}
                 priority
               />
-            </div>
+            </button>
           ) : (
             <div className="viewer-heading">
-              <div>
+              <div className="viewer-heading-title">
                 <h2>{name.trim() || "Outfit"}</h2>
+                <GenerationCostMeta singleCost={outfit.cost} />
               </div>
             </div>
           )}
@@ -620,8 +779,9 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
           <div className="viewer-details editing">
             {hasImage && (
               <div className="viewer-heading modeled-heading">
-                <div>
+                <div className="viewer-heading-title">
                   <h2>{name.trim() || "Outfit"}</h2>
+                  <GenerationCostMeta singleCost={outfit.cost} />
                 </div>
               </div>
             )}
@@ -702,6 +862,17 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
           </div>
         </aside>
       </div>
+      {zoomImage && (
+        <ImageZoomLightbox
+          src={zoomImage.src}
+          alt={zoomImage.alt}
+          onClose={() => setZoomImage(null)}
+          onNavigate={requestNavigate}
+          canPrev={canPrev}
+          canNext={canNext}
+          label="outfit"
+        />
+      )}
     </div>
   );
 }
@@ -879,6 +1050,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [refreshingModeled, setRefreshingModeled] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [zoomImage, setZoomImage] = useState(null);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
   const modeledStatus = item.modeledGeneration?.status || null;
@@ -945,6 +1117,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (zoomImage) return;
       if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") {
         if (confirmRegenerate) setConfirmRegenerate(false);
@@ -962,7 +1135,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [confirmRegenerate, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling]);
+  }, [confirmRegenerate, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
 
   useEffect(() => {
     setSampling(null);
@@ -972,6 +1145,21 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     setRefreshingModeled(false);
     setConfirmRegenerate(false);
     setCloseBlocked(false);
+    setZoomImage((current) => {
+      if (!current) return null;
+      const nextType = TYPE_MAP[item.part]?.singular || "Wardrobe item";
+      const nextName = item.name || nextType;
+      if (current.kind === "modeled" && item.modeledImage) {
+        return { kind: "modeled", src: item.modeledImage, alt: `${nextName} worn by a model` };
+      }
+      if (item.image) {
+        return { kind: "garment", src: item.image, alt: nextName };
+      }
+      if (item.modeledImage) {
+        return { kind: "modeled", src: item.modeledImage, alt: `${nextName} worn by a model` };
+      }
+      return null;
+    });
     // Intentionally keyed on the item's identity, not the whole object—unrelated
     // patches to the same item (e.g. modeled-photo status updates) shouldn't
     // wipe in-progress edits or the extracted color suggestions.
@@ -1031,22 +1219,25 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   };
 
   const handleImageClick = (event) => {
-    if (!sampling || !samplingCanvasRef.current) return;
-    const color = sampleImageColor(event.currentTarget, samplingCanvasRef.current, event);
-    if (!color) {
-      setSampleStatus("That spot is transparent—try directly on the garment.");
+    if (sampling && samplingCanvasRef.current) {
+      const color = sampleImageColor(event.currentTarget, samplingCanvasRef.current, event);
+      if (!color) {
+        setSampleStatus("That spot is transparent—try directly on the garment.");
+        return;
+      }
+      const targetField = sampling === "secondary" ? "secondaryColor" : "color";
+      setDraft((current) => ({ ...current, [targetField]: color }));
+      setPalette((current) => [color, ...current.filter((existing) => existing.toLowerCase() !== color.toLowerCase())].slice(0, 5));
+      setSampleStatus(`Sampled ${color} as the ${sampling} color.`);
+      setSampling(null);
       return;
     }
-    const targetField = sampling === "secondary" ? "secondaryColor" : "color";
-    setDraft((current) => ({ ...current, [targetField]: color }));
-    setPalette((current) => [color, ...current.filter((existing) => existing.toLowerCase() !== color.toLowerCase())].slice(0, 5));
-    setSampleStatus(`Sampled ${color} as the ${sampling} color.`);
-    setSampling(null);
+    setZoomImage({ kind: "garment", src: item.image, alt: draft.name || type });
   };
 
   const garmentArtwork = (
     <div
-      className={`viewer-art${hasModeledImage ? " viewer-art-floating" : ""}${sampling ? " sampling" : ""}`}
+      className={`viewer-art${hasModeledImage ? " viewer-art-floating" : ""}${sampling ? " sampling" : " image-zoom-trigger"}`}
       style={hasModeledImage ? { "--piece-rotation": pieceRotation } : undefined}
     >
       <OptimizedImage
@@ -1080,22 +1271,30 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
       {hasModeledImage ? (
         <div className="modeled-hero">
-          <OptimizedImage
-            className="modeled-hero-photo"
-            src={item.modeledImage}
-            alt={`${draft.name || type} worn by a model`}
-            sizes="(max-width: 860px) 100vw, 520px"
-            breakpoints={[320, 480, 640, 800, 1040, 1280]}
-            quality={82}
-            priority
-          />
+          <button
+            className="modeled-hero-zoom image-zoom-trigger"
+            type="button"
+            onClick={() => setZoomImage({ kind: "modeled", src: item.modeledImage, alt: `${draft.name || type} worn by a model` })}
+            aria-label="View larger modeled photo"
+          >
+            <OptimizedImage
+              className="modeled-hero-photo"
+              src={item.modeledImage}
+              alt={`${draft.name || type} worn by a model`}
+              sizes="(max-width: 860px) 100vw, 520px"
+              breakpoints={[320, 480, 640, 800, 1040, 1280]}
+              quality={82}
+              priority
+            />
+          </button>
           {garmentArtwork}
         </div>
       ) : (
         <>
           <div className={`viewer-heading${onBackToOutfit ? " has-back" : ""}`}>
-            <div>
+            <div className="viewer-heading-title">
               <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
+              <GenerationCostMeta costs={item.costs} />
             </div>
           </div>
           {garmentArtwork}
@@ -1156,8 +1355,9 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       <div className="viewer-details editing">
         {hasModeledImage && (
           <div className="viewer-heading modeled-heading">
-            <div>
+            <div className="viewer-heading-title">
               <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
+              <GenerationCostMeta costs={item.costs} />
             </div>
           </div>
         )}
@@ -1186,6 +1386,17 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       </div>
     </aside>
     </div>
+      {zoomImage && (
+        <ImageZoomLightbox
+          src={zoomImage.src}
+          alt={zoomImage.alt}
+          onClose={() => setZoomImage(null)}
+          onNavigate={requestNavigate}
+          canPrev={canPrev}
+          canNext={canNext}
+          label="garment"
+        />
+      )}
     </div>
   );
 }
@@ -1202,7 +1413,6 @@ export function App() {
   const [composerPrompt, setComposerPrompt] = useState("");
   const [composerError, setComposerError] = useState("");
   const [outfits, setOutfits] = useState([]);
-  const [outfitGenerating, setOutfitGenerating] = useState(false);
   const [selectedOutfitId, setSelectedOutfitId] = useState(null);
   const [returnOutfitId, setReturnOutfitId] = useState(null);
 
@@ -1240,12 +1450,55 @@ export function App() {
         .then((loadedOutfits) => {
           if (!Array.isArray(loadedOutfits)) return;
           setOutfits(loadedOutfits);
-          if (!loadedOutfits.some((outfit) => outfit.status === "processing")) setOutfitGenerating(false);
         })
         .catch(() => {});
     }, 1200);
     return () => clearInterval(timer);
   }, [outfits]);
+
+  const processingModeledIds = items
+    .filter((item) => item.modeledGeneration?.status === "processing")
+    .map((item) => item.id)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    if (!processingModeledIds) return undefined;
+    const ids = processingModeledIds.split(",");
+    const timer = setInterval(() => {
+      Promise.all(
+        ids.map((id) =>
+          fetch(`/api/import/wardrobe/${id}`, { cache: "no-store" })
+            .then((response) => (response.ok ? response.json() : null))
+            .catch(() => null)
+        )
+      ).then((records) => {
+        setItems((current) => {
+          let changed = false;
+          const next = current.map((item) => {
+            const record = records.find((entry) => entry?.id === item.id);
+            if (!record) return item;
+            if (
+              record.modeledImage === item.modeledImage
+              && JSON.stringify(record.modeledGeneration ?? null) === JSON.stringify(item.modeledGeneration ?? null)
+              && JSON.stringify(record.costs ?? null) === JSON.stringify(item.costs ?? null)
+            ) {
+              return item;
+            }
+            changed = true;
+            return {
+              ...item,
+              modeledImage: record.modeledImage ?? item.modeledImage,
+              modeledGeneration: record.modeledGeneration ?? null,
+              costs: record.costs ?? item.costs,
+            };
+          });
+          return changed ? next : current;
+        });
+      });
+    }, 1200);
+    return () => clearInterval(timer);
+  }, [processingModeledIds]);
 
   const selectedItem = items.find((item) => item.id === selectedId) || null;
   const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
@@ -1442,12 +1695,25 @@ export function App() {
   };
 
   const addImportedItem = useCallback((newItem) => {
-    setItems((current) => current.some((item) => item.id === newItem.id) ? current : [...current, newItem]);
+    setItems((current) => {
+      if (current.some((item) => item.id === newItem.id)) {
+        return current.map((item) => (item.id === newItem.id ? { ...item, ...newItem } : item));
+      }
+      return [...current, newItem];
+    });
   }, []);
 
-  const attachImportedModeledImage = useCallback((jobId, modeledImage) => {
+  const attachImportedModeledImage = useCallback((jobId, modeledImage, costs) => {
     const id = `import-${jobId}`;
-    setItems((current) => current.map((item) => item.id === id ? { ...item, modeledImage } : item));
+    setItems((current) => current.map((item) => (
+      item.id === id
+        ? {
+          ...item,
+          modeledImage,
+          ...(costs ? { costs: { ...(item.costs || {}), ...costs } } : {}),
+        }
+        : item
+    )));
   }, []);
 
   const patchItem = useCallback((id, patch) => {
@@ -1479,28 +1745,28 @@ export function App() {
   }, []);
 
   const generateOutfit = useCallback(async () => {
-    if (composerItems.length < 2 || outfitGenerating) return;
+    if (composerItems.length < 2) return;
+    const snapshotItems = composerItems;
+    const garmentIds = snapshotItems.map((item) => item.id);
+    const prompt = composerPrompt.trim();
     setComposerError("");
-    setOutfitGenerating(true);
+    setComposerItems([]);
+    setComposerPrompt("");
     try {
       const response = await fetch("/api/import/outfits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          garmentIds: composerItems.map((item) => item.id),
-          prompt: composerPrompt.trim(),
-        }),
+        body: JSON.stringify({ garmentIds, prompt }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "Could not generate the outfit.");
       setOutfits((current) => [result, ...current.filter((outfit) => outfit.id !== result.id)]);
-      setComposerItems([]);
-      setComposerPrompt("");
     } catch (requestError) {
+      setComposerItems(snapshotItems);
+      setComposerPrompt(prompt);
       setComposerError(requestError.message);
-      setOutfitGenerating(false);
     }
-  }, [composerItems, composerPrompt, outfitGenerating]);
+  }, [composerItems, composerPrompt]);
 
   return (
     <div className={`app-shell${selectedItem || selectedOutfit ? " has-selection" : ""}`}>
@@ -1511,7 +1777,6 @@ export function App() {
             prompt={composerPrompt}
             onPromptChange={setComposerPrompt}
             error={composerError}
-            generating={outfitGenerating || outfits.some((outfit) => outfit.status === "processing")}
             onAdd={addToComposer}
             onRemove={removeFromComposer}
             onGenerate={generateOutfit}
@@ -1591,7 +1856,13 @@ export function App() {
           canNext={outfitNavBounds.canNext}
         />
       )}
-      <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />
+      <WardrobeImportFlow
+        onGarmentApproved={addImportedItem}
+        onModeledApproved={attachImportedModeledImage}
+        processingOutfits={outfits.filter((outfit) => outfit.status === "processing")}
+        processingGarments={items.filter((item) => item.modeledGeneration?.status === "processing")}
+        onDeleteOutfit={deleteOutfit}
+      />
     </div>
   );
 }

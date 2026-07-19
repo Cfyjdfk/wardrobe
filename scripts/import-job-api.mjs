@@ -285,12 +285,64 @@ function stageState() {
   return { status: "pending", decision: null, attempts: 0, assetUrl: null, failedAssetUrl: null, cleanupPreviewUrl: null, cleanupTolerance: 46, cleanupDiagnostics: null, error: null, prompt: null, updatedAt: null };
 }
 
+function openaiFailureError(kind, status, bodyText, parsed) {
+  const message = parsed?.error?.message || `OpenAI ${kind} request failed (${status})`;
+  const detail = typeof parsed?.error === "object"
+    ? JSON.stringify(parsed.error)
+    : (bodyText || "").slice(0, 2000) || null;
+  return Object.assign(new Error(message), {
+    status,
+    detail,
+    responseBody: (bodyText || "").slice(0, 4000) || null,
+  });
+}
+
+/** Per-1M-token rates used to estimate USD from Images API usage. */
+const IMAGE_MODEL_RATES = {
+  "gpt-image-2": { textInput: 5, imageInput: 8, imageOutput: 30 },
+  "gpt-image-1.5": { textInput: 5, imageInput: 8, imageOutput: 32 },
+  "gpt-image-1": { textInput: 5, imageInput: 10, imageOutput: 40 },
+  "gpt-image-1-mini": { textInput: 2, imageInput: 2.5, imageOutput: 8 },
+};
+
+function ratesForImageModel(model) {
+  if (IMAGE_MODEL_RATES[model]) return IMAGE_MODEL_RATES[model];
+  if (typeof model === "string" && model.startsWith("gpt-image-1-mini")) return IMAGE_MODEL_RATES["gpt-image-1-mini"];
+  if (typeof model === "string" && model.startsWith("gpt-image-1.5")) return IMAGE_MODEL_RATES["gpt-image-1.5"];
+  if (typeof model === "string" && model.startsWith("gpt-image-1")) return IMAGE_MODEL_RATES["gpt-image-1"];
+  return IMAGE_MODEL_RATES["gpt-image-2"];
+}
+
+function buildGenerationCost(model, usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const textTokens = Number(usage.input_tokens_details?.text_tokens) || 0;
+  const imageTokens = Number(usage.input_tokens_details?.image_tokens) || 0;
+  const inputTokens = Number(usage.input_tokens) || (textTokens + imageTokens);
+  const outputTokens = Number(usage.output_tokens) || 0;
+  const totalTokens = Number(usage.total_tokens) || (inputTokens + outputTokens);
+  if (!inputTokens && !outputTokens && !totalTokens) return null;
+  const rates = ratesForImageModel(model);
+  const billedText = textTokens || Math.max(0, inputTokens - imageTokens);
+  const billedImageIn = imageTokens;
+  const estimatedUsd = (billedText * rates.textInput + billedImageIn * rates.imageInput + outputTokens * rates.imageOutput) / 1_000_000;
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    textTokens: textTokens || null,
+    imageTokens: imageTokens || null,
+    estimatedUsd: Number(estimatedUsd.toFixed(6)),
+    at: new Date().toISOString(),
+  };
+}
+
 async function openAIEdit({ key, baseUrl, model, prompt, images, size, background, quality }) {
   const form = new FormData();
   form.set("model", model);
   form.set("prompt", prompt);
   form.set("size", size);
-  form.set("quality", quality || "high");
+  form.set("quality", quality || "medium");
   form.set("output_format", "png");
   if (background) form.set("background", background);
   for (const [index, image] of images.entries()) {
@@ -300,11 +352,17 @@ async function openAIEdit({ key, baseUrl, model, prompt, images, size, backgroun
   const response = await fetch(`${baseUrl}/images/edits`, {
     method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form,
   });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || `OpenAI image request failed (${response.status})`);
+  const bodyText = await response.text();
+  let result = {};
+  try { result = bodyText ? JSON.parse(bodyText) : {}; }
+  catch { result = {}; }
+  if (!response.ok) throw openaiFailureError("image", response.status, bodyText, result);
   const encoded = result.data?.[0]?.b64_json;
-  if (!encoded) throw new Error("OpenAI response did not contain image data");
-  return Buffer.from(encoded, "base64");
+  if (!encoded) throw Object.assign(new Error("OpenAI response did not contain image data"), { detail: bodyText.slice(0, 2000) || null });
+  return {
+    bytes: Buffer.from(encoded, "base64"),
+    cost: buildGenerationCost(model, result.usage),
+  };
 }
 
 async function openAIAnalyze({ key, baseUrl, model, image, mime }) {
@@ -320,14 +378,19 @@ async function openAIAnalyze({ key, baseUrl, model, image, mime }) {
       text: { format: { type: "json_schema", name: "wardrobe_items", strict: true, schema: { type: "object", additionalProperties: false, properties: { items: { type: "array", minItems: 0, maxItems: 8, items: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, part: { type: "string", enum: ["upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes"] }, color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, secondaryColor: { anyOf: [{ type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, { type: "null" }] }, tags: { type: "array", items: { type: "string" }, maxItems: 4 }, boundingBox: { type: "object", additionalProperties: false, properties: { x: { type: "integer", minimum: 0, maximum: 999 }, y: { type: "integer", minimum: 0, maximum: 999 }, width: { type: "integer", minimum: 1, maximum: 1000 }, height: { type: "integer", minimum: 1, maximum: 1000 } }, required: ["x", "y", "width", "height"] } }, required: ["name", "part", "color", "secondaryColor", "tags", "boundingBox"] } } }, required: ["items"] } } },
     }),
   });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || `OpenAI analysis failed (${response.status})`);
+  const bodyText = await response.text();
+  let result = {};
+  try { result = bodyText ? JSON.parse(bodyText) : {}; }
+  catch { result = {}; }
+  if (!response.ok) throw openaiFailureError("analysis", response.status, bodyText, result);
   const outputText = result.output_text || result.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
-  if (!outputText) throw new Error("OpenAI analysis returned no structured result");
+  if (!outputText) throw Object.assign(new Error("OpenAI analysis returned no structured result"), { detail: bodyText.slice(0, 2000) || null });
   const parsed = JSON.parse(outputText);
   if (!Array.isArray(parsed.items)) throw new Error("OpenAI analysis returned an invalid clothing list");
   return parsed.items;
 }
+
+const ERROR_LOG_LIMIT = 100;
 
 export function wardrobeImportApi(options = {}) {
   let root;
@@ -336,9 +399,58 @@ export function wardrobeImportApi(options = {}) {
   let libraryAssetDir;
   let outfitsFile;
   let outfitAssetDir;
+  let errorsFile;
   const running = new Map();
   const setting = (name, fallback = "") => options.env?.[name] || process.env[name] || fallback;
   const apiBaseUrl = () => setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1").replace(/\/$/, "");
+
+  async function loadErrorsDocument() {
+    try {
+      const document = JSON.parse(await readFile(errorsFile, "utf8"));
+      if (!document || !Array.isArray(document.errors)) return { version: 1, errors: [] };
+      return { version: 1, errors: document.errors };
+    } catch (error) {
+      if (error.code === "ENOENT") return { version: 1, errors: [] };
+      throw error;
+    }
+  }
+
+  async function saveErrorsDocument(document) {
+    await atomicJson(errorsFile, { version: 1, errors: document.errors || [] });
+  }
+
+  async function logError({ source, title, message, detail = null, context = null, dedupeKey = null }) {
+    const document = await loadErrorsDocument();
+    if (dedupeKey) {
+      const existing = document.errors.find((entry) => entry.dedupeKey === dedupeKey && entry.message === message);
+      if (existing) return existing;
+    }
+    const entry = {
+      id: `err-${randomUUID()}`,
+      createdAt: new Date().toISOString(),
+      source,
+      title,
+      message: message || "Unknown error",
+      detail: detail || null,
+      context: context || null,
+      dedupeKey: dedupeKey || null,
+    };
+    document.errors = [entry, ...document.errors].slice(0, ERROR_LOG_LIMIT);
+    await saveErrorsDocument(document);
+    console.error(`[wardrobe:${source}] ${title}: ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`);
+    return entry;
+  }
+
+  async function logCaughtError(error, { source, title, context = null, dedupeKey = null }) {
+    return logError({
+      source,
+      title,
+      message: error?.message || String(error),
+      detail: error?.detail || error?.responseBody || null,
+      context,
+      dedupeKey,
+    });
+  }
 
   async function setupStatus() {
     const hasApiKey = Boolean(setting("OPENAI_API_KEY").trim());
@@ -421,6 +533,11 @@ export function wardrobeImportApi(options = {}) {
     const metadata = job.metadata || {};
     const records = await loadImported();
     const existing = records.find((record) => record.id === id);
+    const costs = {
+      ...(existing?.costs || {}),
+      ...(job.stages.garment?.cost ? { garment: job.stages.garment.cost } : {}),
+      ...(includeModeled && job.stages.modeled?.cost ? { modeled: job.stages.modeled.cost } : {}),
+    };
     const record = {
       id,
       name: metadata.name || "New piece",
@@ -433,6 +550,7 @@ export function wardrobeImportApi(options = {}) {
       thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
       modeledImage: modeledImage || existing?.modeledImage || null,
       importJobId: job.id,
+      ...(Object.keys(costs).length ? { costs } : {}),
     };
     const next = [...records.filter((item) => item.id !== id), record];
     await atomicJson(importedFile, next);
@@ -462,7 +580,7 @@ export function wardrobeImportApi(options = {}) {
     const model = { data: modelData, mime: "image/png", name: "model.png" };
     const basePrompt = options.modeledPrompt || buildModeledPrompt();
     const prompt = direction ? `${basePrompt}\nUser regeneration direction: ${direction}` : basePrompt;
-    return openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt });
+    return openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "medium"), size: "1536x1024", images: [model, garment], prompt });
   }
 
   async function updateWardrobeRecord(id, updater) {
@@ -484,16 +602,30 @@ export function wardrobeImportApi(options = {}) {
         const records = await loadImported();
         const record = records.find((item) => item.id === id);
         if (!record) return;
-        const bytes = await generateModeledImageBytes(record, direction);
+        const { bytes, cost } = await generateModeledImageBytes(record, direction);
         const assetName = `${id}-modeled.png`;
         await writeFile(path.join(libraryAssetDir, assetName), bytes);
         const modeledImage = `${LIBRARY_ASSET_ROOT}/${assetName}?v=${Date.now()}`;
-        await updateWardrobeRecord(id, (current) => ({ ...current, modeledImage, modeledGeneration: null }));
+        await updateWardrobeRecord(id, (current) => ({
+          ...current,
+          modeledImage,
+          modeledGeneration: null,
+          costs: {
+            ...(current.costs || {}),
+            ...(cost ? { modeled: cost } : {}),
+          },
+        }));
       } catch (error) {
         await updateWardrobeRecord(id, (current) => ({
           ...current,
           modeledGeneration: { status: "failed", error: error.message, startedAt: current.modeledGeneration?.startedAt || new Date().toISOString() },
         })).catch(() => {});
+        await logCaughtError(error, {
+          source: "modeled",
+          title: "Modeled photo failed",
+          context: { wardrobeItemId: id },
+          dedupeKey: `modeled:${id}`,
+        }).catch(() => {});
       }
     })().finally(() => running.delete(lock));
     running.set(lock, task);
@@ -547,7 +679,7 @@ export function wardrobeImportApi(options = {}) {
       key,
       baseUrl: apiBaseUrl(),
       model: setting("OPENAI_OUTFIT_MODEL", setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2"))),
-      quality: setting("OPENAI_IMAGE_QUALITY", "high"),
+      quality: setting("OPENAI_IMAGE_QUALITY", "medium"),
       size: "1024x1024",
       images,
       prompt,
@@ -567,7 +699,7 @@ export function wardrobeImportApi(options = {}) {
           .map((garmentId) => records.find((item) => item.id === garmentId))
           .filter(Boolean);
         if (garments.length < 2) throw new Error("This outfit is missing garments from the wardrobe.");
-        const bytes = await generateOutfitImageBytes(outfit, garments);
+        const { bytes, cost } = await generateOutfitImageBytes(outfit, garments);
         await mkdir(outfitAssetDir, { recursive: true });
         const assetName = `${id}.png`;
         await writeFile(path.join(outfitAssetDir, assetName), bytes);
@@ -577,15 +709,26 @@ export function wardrobeImportApi(options = {}) {
           image,
           status: "ready",
           error: null,
+          cost: cost || current.cost || null,
           completedAt: new Date().toISOString(),
         }));
       } catch (error) {
-        await updateOutfitRecord(id, (current) => ({
-          ...current,
-          status: "failed",
-          error: error.message,
-          completedAt: new Date().toISOString(),
-        })).catch(() => {});
+        let outfitName = id;
+        await updateOutfitRecord(id, (current) => {
+          outfitName = current.name || id;
+          return {
+            ...current,
+            status: "failed",
+            error: error.message,
+            completedAt: new Date().toISOString(),
+          };
+        }).catch(() => {});
+        await logCaughtError(error, {
+          source: "outfit",
+          title: "Outfit generation failed",
+          context: { outfitId: id, outfitName },
+          dedupeKey: `outfit:${id}:${error.message}`,
+        }).catch(() => {});
       }
     })().finally(() => running.delete(lock));
     running.set(lock, task);
@@ -610,10 +753,11 @@ export function wardrobeImportApi(options = {}) {
         const sourceFile = stageName === "garment" && current.internal.cropFile ? current.internal.cropFile : current.internal.originalFile;
         const original = { data: await readFile(path.join(dir, sourceFile)), mime: "image/png", name: sourceFile };
         let bytes;
+        let cost = null;
         if (stageName === "garment") {
           chromaKeyUsed = chooseChromaKey(current.metadata.color);
           const basePrompt = options.garmentPrompt || buildGarmentPrompt(current.metadata, chromaKeyUsed);
-          bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1024x1024", images: [original], prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt });
+          ({ bytes, cost } = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "medium"), size: "1024x1024", images: [original], prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt }));
           const rawName = `${stageName}-${stage.attempts}-source.png`;
           await writeFile(path.join(dir, rawName), bytes);
           failedAssetUrl = `${ASSET_ROOT}/${current.id}/${rawName}`;
@@ -634,7 +778,7 @@ export function wardrobeImportApi(options = {}) {
           }
           const model = { data: modelData, mime: "image/png", name: "model.png" };
           const basePrompt = options.modeledPrompt || buildModeledPrompt();
-          bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt: current.stages.modeled.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.modeled.prompt}` : basePrompt });
+          ({ bytes, cost } = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "medium"), size: "1536x1024", images: [model, garment], prompt: current.stages.modeled.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.modeled.prompt}` : basePrompt }));
         }
         await writeFile(output, bytes);
         const fresh = await loadJob(current.id);
@@ -643,6 +787,7 @@ export function wardrobeImportApi(options = {}) {
         fresh.stages[stageName].failedAssetUrl = null;
         fresh.stages[stageName].cleanupPreviewUrl = null;
         fresh.stages[stageName].cleanupDiagnostics = null;
+        fresh.stages[stageName].cost = cost;
         if (chromaKeyUsed) fresh.stages[stageName].chromaKey = chromaKeyUsed;
         fresh.stages[stageName].updatedAt = new Date().toISOString();
         await saveJob(fresh);
@@ -652,6 +797,12 @@ export function wardrobeImportApi(options = {}) {
         if (typeof failedAssetUrl === "string") fresh.stages[stageName].failedAssetUrl = failedAssetUrl;
         if (chromaKeyUsed) fresh.stages[stageName].chromaKey = chromaKeyUsed;
         await saveJob(fresh);
+        await logCaughtError(error, {
+          source: "import",
+          title: `Import ${stageName} failed`,
+          context: { jobId: current.id, stage: stageName },
+          dedupeKey: `import:${current.id}:${stageName}:${error.message}`,
+        }).catch(() => {});
       }
     })().finally(() => running.delete(lock));
     running.set(lock, task);
@@ -962,6 +1113,7 @@ export function wardrobeImportApi(options = {}) {
       libraryAssetDir = path.join(dataDir, "imported");
       outfitsFile = path.join(dataDir, "outfits.json");
       outfitAssetDir = path.join(dataDir, "outfit-images");
+      errorsFile = path.join(dataDir, "errors.json");
       await mkdir(jobsDir, { recursive: true });
       await mkdir(libraryAssetDir, { recursive: true });
       await mkdir(outfitAssetDir, { recursive: true });
@@ -986,6 +1138,26 @@ export function wardrobeImportApi(options = {}) {
         };
       });
       if (outfitsInterrupted) await saveOutfitsDocument({ ...outfitsDocument, outfits: sweptOutfits });
+      for (const outfit of (outfitsInterrupted ? sweptOutfits : outfitsDocument.outfits)) {
+        if (outfit.status !== "failed" || !outfit.error) continue;
+        await logError({
+          source: "outfit",
+          title: "Outfit generation failed",
+          message: outfit.error,
+          context: { outfitId: outfit.id, outfitName: outfit.name || outfit.id },
+          dedupeKey: `outfit:${outfit.id}:${outfit.error}`,
+        }).catch(() => {});
+      }
+      for (const record of (importedInterrupted ? sweptRecords : importedRecords)) {
+        if (record.modeledGeneration?.status !== "failed" || !record.modeledGeneration.error) continue;
+        await logError({
+          source: "modeled",
+          title: "Modeled photo failed",
+          message: record.modeledGeneration.error,
+          context: { wardrobeItemId: record.id, name: record.name || record.id },
+          dedupeKey: `modeled:${record.id}:${record.modeledGeneration.error}`,
+        }).catch(() => {});
+      }
       const ids = await readdir(jobsDir).catch(() => []);
       for (const id of ids) {
         const job = await loadJob(id);

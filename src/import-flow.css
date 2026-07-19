@@ -218,6 +218,50 @@
   background: rgba(255, 255, 255, 0.38);
 }
 .import-card__image { width: 88px; aspect-ratio: 4 / 5; object-fit: contain; background: var(--import-ivory); border-radius: 10px; }
+.import-card__image--outfit {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--import-ivory) 88%, #fff);
+}
+.import-card__rainbow {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      125deg,
+      #f2b8c6 0%,
+      #f0d4a8 22%,
+      #e8e4a8 40%,
+      #b8dfc8 58%,
+      #a8c8e8 76%,
+      #c8b8e8 100%
+    );
+  background-size: 220% 220%;
+  opacity: .72;
+  animation: import-rainbow-pulse 2.4s ease-in-out infinite;
+}
+.import-card__image--loading {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--import-muted);
+}
+.import-card__image--loading img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: .55;
+}
+.import-card__spinner {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--import-ink, #24231f);
+}
+.import-card-list--follow { margin-top: 28px; }
+.import-card-list--follow .import-editor__stage { margin-bottom: 10px; }
 .import-card__body { min-width: 0; }
 .import-card__title { margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
 .import-card__detail { margin: 0; color: var(--import-muted); font-size: 12px; }
@@ -267,6 +311,18 @@
 @keyframes import-progress { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
 @keyframes import-pulse { 50% { transform: scale(1.65); opacity: 0.22; } }
 @keyframes import-spin { to { transform: rotate(360deg); } }
+@keyframes import-rainbow-pulse {
+  0%, 100% {
+    opacity: .42;
+    background-position: 0% 40%;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .88;
+    background-position: 100% 60%;
+    transform: scale(1.04);
+  }
+}
 .import-spinner { animation: import-spin 900ms linear infinite; }
 
 @media (max-width: 640px) {
@@ -316,5 +372,8 @@
   .import-icon-button { transition-duration: 0.01ms !important; }
   .import-progress.is-indeterminate .import-progress__bar,
   .import-status.is-processing::before,
+  .import-card__detail--status[data-tone="processing"]::before,
+  .import-card__rainbow,
   .import-spinner { animation: none !important; }
+  .import-card__rainbow { opacity: .62; }
 }
