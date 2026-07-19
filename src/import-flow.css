@@ -26,7 +26,6 @@
   transition: opacity 220ms ease, visibility 220ms ease;
 }
 
-.import-drop-overlay.is-active,
 .import-drop-overlay[data-active="true"] {
   opacity: 1;
   visibility: visible;
@@ -49,7 +48,6 @@
   transition: transform 360ms var(--import-ease), background 200ms ease;
 }
 
-.import-drop-overlay.is-active .import-drop-target,
 .import-drop-overlay[data-active="true"] .import-drop-target { transform: scale(1); }
 .import-drop-target.is-over { background: rgba(255, 253, 247, 0.9); }
 .import-drop-target h2 { margin: 0; font: 500 clamp(24px, 4vw, 42px)/1.05 "Instrument Sans", sans-serif; letter-spacing: -0.035em; }

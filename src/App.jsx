@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, Check, MagnifyingGlass, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowLeft, BookmarkSimple, CaretLeft, CaretRight, MagnifyingGlass, Plus, Sparkle, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
@@ -118,8 +118,7 @@ function arrowNavigationDelta(key, columnCount = 1) {
   return 0;
 }
 
-function measureGridColumnCount(selector) {
-  const grid = document.querySelector(selector);
+function measureGridColumnCount(grid) {
   if (!(grid instanceof HTMLElement)) return 1;
   const items = Array.from(grid.children).filter(
     (node) => node instanceof HTMLElement && !node.hidden && node.getAttribute("aria-hidden") !== "true",
@@ -372,7 +371,7 @@ const GALLERY_SKELETON_COUNT = 12;
 
 function GallerySkeleton({ count = GALLERY_SKELETON_COUNT, tileSize = DEFAULT_GARMENT_TILE_SIZE }) {
   return (
-    <section className={`gallery-grid gallery-grid--${tileSize} gallery-grid--skeleton`} aria-busy="true" aria-label="Loading wardrobe">
+    <section className={`gallery-grid gallery-grid--${tileSize}`} aria-busy="true" aria-label="Loading wardrobe">
       {Array.from({ length: count }, (_, index) => (
         <div
           key={index}
@@ -605,13 +604,13 @@ function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove,
   );
 }
 
-const OutfitsSection = memo(function OutfitsSection({ outfits, selectedId, onOpen }) {
+const OutfitsSection = memo(function OutfitsSection({ outfits, selectedId, onOpen, gridRef }) {
   const visible = outfits.filter((outfit) => outfit.status !== "processing");
   if (!visible.length) return null;
 
   return (
     <section className="outfits-section" aria-label="Outfits">
-      <div className="outfits-grid">
+      <div className="outfits-grid" ref={gridRef}>
         {visible.map((outfit) => {
           const canOpen = outfit.status === "ready" || outfit.status === "failed";
           return (
@@ -661,6 +660,7 @@ const GarmentsPanel = memo(function GarmentsPanel({
   activeType,
   searching,
   tileSize = DEFAULT_GARMENT_TILE_SIZE,
+  gridRef,
 }) {
   const emptyFilterMessage = (() => {
     if (searching) return "No garments match this search.";
@@ -671,12 +671,13 @@ const GarmentsPanel = memo(function GarmentsPanel({
   return (
     <>
       {!error && loading && <GallerySkeleton tileSize={tileSize} />}
-      {!error && !loading && !itemsLength && <p className="status empty">Drop, paste, or add a photo to import your first piece.</p>}
+      {!error && !loading && !itemsLength && <p className="status">Drop, paste, or add a photo to import your first piece.</p>}
       {!error && !loading && !!itemsLength && !visibleCount && (
-        <p className="status empty">{emptyFilterMessage}</p>
+        <p className="status">{emptyFilterMessage}</p>
       )}
       {!loading && !!galleryItems.length && (
         <section
+          ref={gridRef}
           className={`gallery-grid gallery-grid--${tileSize}`}
           aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}
           hidden={!visibleCount}
@@ -732,11 +733,12 @@ const OutfitsPanel = memo(function OutfitsPanel({
   outfits,
   selectedId,
   onOpen,
+  gridRef,
 }) {
   return (
     <>
       {!error && !listedCount && (
-        <p className="status empty">
+        <p className="status">
           {searching
             ? "No outfits match this search."
             : totalCount
@@ -745,7 +747,7 @@ const OutfitsPanel = memo(function OutfitsPanel({
         </p>
       )}
       {!error && !!listedCount && (
-        <OutfitsSection outfits={outfits} selectedId={selectedId} onOpen={onOpen} />
+        <OutfitsSection outfits={outfits} selectedId={selectedId} onOpen={onOpen} gridRef={gridRef} />
       )}
     </>
   );
@@ -753,6 +755,7 @@ const OutfitsPanel = memo(function OutfitsPanel({
 
 function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext, gridColumns = 1 }) {
   const closeButtonRef = useRef(null);
+  const mountedRef = useRef(true);
   const [name, setName] = useState(outfit.name || "");
   const [tags, setTags] = useState(() => outfitDetailTags(outfit));
   const [saving, setSaving] = useState(false);
@@ -765,17 +768,11 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     || JSON.stringify(normalizeDetailTags(tags)) !== JSON.stringify(normalizeDetailTags(savedTags));
 
   useEffect(() => {
-    setName(outfit.name || "");
-    setTags(outfitDetailTags(outfit));
-    setSaveError("");
-    setZoomImage((current) => {
-      if (!current) return null;
-      if (outfit.status === "ready" && outfit.image) {
-        return { kind: "outfit", src: outfit.image, alt: outfit.name || "Outfit" };
-      }
-      return null;
-    });
-  }, [outfit.id]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const persistOutfit = useCallback(async () => {
     const nextName = name.trim();
@@ -792,14 +789,16 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     setSaveError("");
     try {
       await onSave(outfit.id, { name: nextName, tags: nextTags });
+      if (!mountedRef.current) return false;
       setName(nextName);
       setTags(nextTags);
       return true;
     } catch (error) {
+      if (!mountedRef.current) return false;
       setSaveError(error.message || "Could not save the outfit.");
       return false;
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   }, [name, onSave, outfit.id, outfit.name, savedTags, tags]);
 
@@ -833,7 +832,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
     const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
     return unlock;
-  }, [outfit.id]);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1171,8 +1170,8 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
 
 function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext, gridColumns = 1 }) {
   const closeButtonRef = useRef(null);
-  const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
+  const mountedRef = useRef(true);
   const [sampling, setSampling] = useState(null);
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
@@ -1190,15 +1189,12 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const garmentError = garmentStatus === "failed" ? item.garmentGeneration.error : "";
 
   useEffect(() => {
-    if (!modeledBusy) return;
-    setZoomImage((current) => (current?.kind === "modeled" ? null : current));
-  }, [modeledBusy]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  useEffect(() => {
-    if (!garmentBusy) return;
-    setSampling(null);
-    setZoomImage((current) => (current?.kind === "garment" ? null : current));
-  }, [garmentBusy]);
   const pieceRotation = useMemo(() => {
     const hash = [...item.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     return `${(hash % 9) - 4}deg`;
@@ -1224,6 +1220,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   }, [draft, item]);
 
   const persistDraft = useCallback(() => {
+    if (!mountedRef.current) return;
     onSave({
       ...item,
       ...draft,
@@ -1267,7 +1264,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     const unlock = lockBodyScroll();
     closeButtonRef.current?.focus({ preventScroll: true });
     return unlock;
-  }, [item.id]);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1293,34 +1290,8 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [confirmKind, gridColumns, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
 
-  useEffect(() => {
-    setSampling(null);
-    setSampleStatus("");
-    setPalette(item.palette || []);
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
-    setConfirmKind(null);
-    setRegenPrompt("");
-    setZoomImage((current) => {
-      if (!current) return null;
-      const nextType = TYPE_MAP[item.part]?.singular || "Wardrobe item";
-      const nextName = item.name || nextType;
-      if (current.kind === "modeled" && item.modeledImage) {
-        return { kind: "modeled", src: item.modeledImage, alt: `${nextName} worn by a model` };
-      }
-      if (item.image) {
-        return { kind: "garment", src: item.image, alt: nextName };
-      }
-      if (item.modeledImage) {
-        return { kind: "modeled", src: item.modeledImage, alt: `${nextName} worn by a model` };
-      }
-      return null;
-    });
-    // Intentionally keyed on the item's identity, not the whole object—unrelated
-    // patches to the same item (e.g. modeled-photo status updates) shouldn't
-    // wipe in-progress edits or the extracted color suggestions.
-  }, [item.id]);
-
   const generateModeledPhoto = async (prompt = "") => {
+    setZoomImage((current) => (current?.kind === "modeled" ? null : current));
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}/modeled`, {
         method: "POST",
@@ -1329,17 +1300,21 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       });
       const value = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(value.error || "Could not generate a modeled photo.");
+      if (!mountedRef.current) return;
       onGenerateModeled(item.id, {
         modeledImage: value.modeledImage,
         modeledGeneration: value.modeledGeneration ?? null,
         costs: value.costs ?? item.costs,
       });
     } catch (requestError) {
+      if (!mountedRef.current) return;
       onGenerateModeled(item.id, { modeledGeneration: { status: "failed", error: requestError.message } });
     }
   };
 
   const generateGarmentPhoto = async (prompt = "") => {
+    setSampling(null);
+    setZoomImage((current) => (current?.kind === "garment" ? null : current));
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}/garment`, {
         method: "POST",
@@ -1348,6 +1323,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       });
       const value = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(value.error || "Could not regenerate the garment.");
+      if (!mountedRef.current) return;
       onGenerateModeled(item.id, {
         image: value.image ?? item.image,
         thumbnail: value.thumbnail ?? value.image ?? item.thumbnail,
@@ -1355,6 +1331,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
         costs: value.costs ?? item.costs,
       });
     } catch (requestError) {
+      if (!mountedRef.current) return;
       onGenerateModeled(item.id, { garmentGeneration: { status: "failed", error: requestError.message } });
     }
   };
@@ -1412,7 +1389,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
         <span className="viewer-art-rainbow" aria-hidden="true" />
       ) : (
         <OptimizedImage
-          ref={imageRef}
           src={item.image}
           alt={`Selected ${type.toLowerCase()}`}
           draggable={false}
@@ -1622,44 +1598,72 @@ export function App() {
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
-    fetch("/api/import/wardrobe", { cache: "no-store" })
+    const controller = new AbortController();
+    fetch("/api/import/wardrobe", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error("Could not load the wardrobe.");
         return response.json();
       })
       .then((loadedItems) => {
+        if (controller.signal.aborted) return;
         const edits = readEdits();
         const deleted = readDeletedItems();
         const visibleItems = loadedItems.filter((item) => !deleted.has(item.id));
         setItems(visibleItems.map((item) => ({ ...item, ...(edits[item.id] || {}) })));
       })
-      .catch((requestError) => setError(requestError.message))
-      .finally(() => setLoading(false));
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+        setError(requestError.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
-    fetch("/api/import/outfits", { cache: "no-store" })
+    const controller = new AbortController();
+    fetch("/api/import/outfits", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error("Could not load outfits.");
         return response.json();
       })
-      .then((loadedOutfits) => setOutfits(Array.isArray(loadedOutfits) ? loadedOutfits : []))
+      .then((loadedOutfits) => {
+        if (controller.signal.aborted) return;
+        setOutfits(Array.isArray(loadedOutfits) ? loadedOutfits : []);
+      })
       .catch(() => {});
+    return () => controller.abort();
   }, []);
 
+  const processingOutfitIds = outfits
+    .filter((outfit) => outfit.status === "processing")
+    .map((outfit) => outfit.id)
+    .sort()
+    .join(",");
+
   useEffect(() => {
-    if (!outfits.some((outfit) => outfit.status === "processing")) return undefined;
+    if (!processingOutfitIds) return undefined;
+    let cancelled = false;
+    let activeController = null;
     const timer = setInterval(() => {
-      fetch("/api/import/outfits", { cache: "no-store" })
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      fetch("/api/import/outfits", { cache: "no-store", signal: controller.signal })
         .then((response) => (response.ok ? response.json() : null))
         .then((loadedOutfits) => {
-          if (!Array.isArray(loadedOutfits)) return;
+          if (cancelled || controller.signal.aborted || !Array.isArray(loadedOutfits)) return;
           setOutfits(loadedOutfits);
         })
         .catch(() => {});
     }, 1200);
-    return () => clearInterval(timer);
-  }, [outfits]);
+    return () => {
+      cancelled = true;
+      activeController?.abort();
+      clearInterval(timer);
+    };
+  }, [processingOutfitIds]);
 
   const processingGenerationIds = items
     .filter((item) => item.modeledGeneration?.status === "processing" || item.garmentGeneration?.status === "processing")
@@ -1670,14 +1674,20 @@ export function App() {
   useEffect(() => {
     if (!processingGenerationIds) return undefined;
     const ids = processingGenerationIds.split(",");
+    let cancelled = false;
+    let activeController = null;
     const timer = setInterval(() => {
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
       Promise.all(
         ids.map((id) =>
-          fetch(`/api/import/wardrobe/${id}`, { cache: "no-store" })
+          fetch(`/api/import/wardrobe/${id}`, { cache: "no-store", signal: controller.signal })
             .then((response) => (response.ok ? response.json() : null))
             .catch(() => null)
         )
       ).then((records) => {
+        if (cancelled || controller.signal.aborted) return;
         setItems((current) => {
           let changed = false;
           const next = current.map((item) => {
@@ -1708,7 +1718,11 @@ export function App() {
         });
       });
     }, 1200);
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      activeController?.abort();
+      clearInterval(timer);
+    };
   }, [processingGenerationIds]);
 
   const selectedItem = items.find((item) => item.id === selectedId) || null;
@@ -1899,28 +1913,26 @@ export function App() {
 
   const [garmentGridColumns, setGarmentGridColumns] = useState(1);
   const [outfitGridColumns, setOutfitGridColumns] = useState(1);
+  const garmentGridRef = useRef(null);
+  const outfitGridRef = useRef(null);
 
   useEffect(() => {
-    const measure = () => {
-      setGarmentGridColumns(
-        returnOutfitId
-          ? 1
-          : measureGridColumnCount(".library-panel:not([hidden]) .gallery-grid"),
-      );
-      setOutfitGridColumns(measureGridColumnCount(".library-panel:not([hidden]) .outfits-grid"));
+    const observers = [];
+    const observe = (element, setColumns) => {
+      if (!(element instanceof HTMLElement)) {
+        setColumns(1);
+        return;
+      }
+      const update = () => setColumns(measureGridColumnCount(element));
+      update();
+      const observer = new ResizeObserver(update);
+      observer.observe(element);
+      observers.push(observer);
     };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [
-    returnOutfitId,
-    garmentTileSize,
-    libraryTab,
-    visibleItems.length,
-    listedOutfits.length,
-    selectedId,
-    selectedOutfitId,
-  ]);
+    observe(garmentGridRef.current, setGarmentGridColumns);
+    observe(outfitGridRef.current, setOutfitGridColumns);
+    return () => observers.forEach((observer) => observer.disconnect());
+  }, [libraryTab, garmentTileSize, loading, visibleItems.length, listedOutfits.length]);
 
   const chooseType = (typeId) => {
     setActiveType(typeId);
@@ -2206,6 +2218,7 @@ export function App() {
             activeType={activeType}
             searching={Boolean(deferredSearchQuery)}
             tileSize={garmentTileSize}
+            gridRef={garmentGridRef}
           />
         </div>
 
@@ -2218,12 +2231,14 @@ export function App() {
             outfits={visibleOutfits}
             selectedId={selectedOutfitId}
             onOpen={openOutfit}
+            gridRef={outfitGridRef}
           />
         </div>
       </main>
 
       {selectedItem && (
         <ItemViewer
+          key={selectedItem.id}
           item={selectedItem}
           onClose={closeItemViewer}
           onSave={saveItem}
@@ -2233,11 +2248,12 @@ export function App() {
           onNavigate={navigateItem}
           canPrev={itemNavBounds.canPrev}
           canNext={itemNavBounds.canNext}
-          gridColumns={garmentGridColumns}
+          gridColumns={returnOutfitId ? 1 : garmentGridColumns}
         />
       )}
       {selectedOutfit && (
         <OutfitViewer
+          key={selectedOutfit.id}
           outfit={selectedOutfit}
           garments={selectedOutfitGarments}
           onClose={() => setSelectedOutfitId(null)}

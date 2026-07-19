@@ -80,6 +80,14 @@ function isReviewable(job) {
   return Boolean(reviewStageFor(job) || hasCleanupFailure(job));
 }
 
+function isProcessingJob(job) {
+  return (
+    (job.stages?.crop?.status === "approved" && ["processing", "pending", "queued"].includes(job.stages?.garment?.status))
+    || ["processing", "queued"].includes(job.stages?.modeled?.status)
+    || (job.stages?.garment?.status === "approved" && job.stages?.modeled?.status === "pending")
+  );
+}
+
 function defaultDraft(job) {
   const metadata = job.metadata || {};
   return {
@@ -94,6 +102,7 @@ function defaultDraft(job) {
 
 function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt, busy, onAction }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const closeLightbox = useCallback(() => setLightboxOpen(false), []);
   const asset = job.stages[stage]?.assetUrl;
   const isCrop = stage === "crop";
   const isGarment = stage === "garment";
@@ -155,7 +164,7 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
           className="import-image-zoom-lightbox"
           src={asset}
           alt={previewAlt}
-          onClose={() => setLightboxOpen(false)}
+          onClose={closeLightbox}
         />
       )}
     </div>
@@ -166,11 +175,20 @@ function CleanupEditor({ job, tolerance, setTolerance, busy, onPreview, onAccept
   const stage = job.stages.garment;
   const contaminated = stage.cleanupDiagnostics?.contaminatedPixels;
   const previewTimer = useRef(null);
-  useEffect(() => () => clearTimeout(previewTimer.current), []);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(previewTimer.current);
+    };
+  }, []);
   const updateTolerance = (next) => {
     setTolerance(next);
     clearTimeout(previewTimer.current);
-    previewTimer.current = setTimeout(() => onPreview(next), 300);
+    previewTimer.current = setTimeout(() => {
+      if (mountedRef.current) onPreview(next);
+    }, 300);
   };
   return (
     <div className="import-cleanup-editor">
@@ -219,6 +237,8 @@ export function WardrobeImportFlow({
   onOpenCompletion,
 }) {
   const inputRef = useRef(null);
+  const mountedRef = useRef(true);
+  const pendingUploadsRef = useRef([]);
   const previousProcessingRef = useRef(processingKeys(processingOutfits, processingGarments));
   const previousOutfitStatusRef = useRef(outfitStatusMap(outfits));
   const [jobs, setJobs] = useState([]);
@@ -237,41 +257,77 @@ export function WardrobeImportFlow({
   const [pendingUploads, setPendingUploads] = useState([]);
 
   useEffect(() => {
-    api(CONFIG_API).then(setSetup).catch((requestError) => setSetup({ ready: false, error: requestError.message }));
-    api(API)
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const entry of pendingUploadsRef.current) {
+        URL.revokeObjectURL(entry.previewUrl);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    pendingUploadsRef.current = pendingUploads;
+  }, [pendingUploads]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api(CONFIG_API, { signal: controller.signal })
+      .then((value) => {
+        if (!controller.signal.aborted) setSetup(value);
+      })
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+        setSetup({ ready: false, error: requestError.message });
+      });
+    api(API, { signal: controller.signal })
       .then((storedJobs) => {
+        if (controller.signal.aborted) return;
         const visibleJobs = storedJobs.filter((job) => job.status !== "complete" && job.stages?.crop?.status !== "rejected" && job.stages?.garment?.status !== "rejected" && job.stages?.modeled?.status !== "rejected");
         setJobs(visibleJobs);
         setDrafts(Object.fromEntries(visibleJobs.map((job) => [job.id, defaultDraft(job)])));
       })
-      .catch(() => {});
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+      });
+    return () => controller.abort();
   }, []);
 
-  const refresh = useCallback(async (id) => {
+  const refresh = useCallback(async (id, signal) => {
     try {
-      const next = await api(`${API}/${id}`);
+      const next = await api(`${API}/${id}`, signal ? { signal } : undefined);
+      if (signal?.aborted || !mountedRef.current) return;
       setJobs((current) => current.map((job) => job.id === id ? next : job));
       setDrafts((current) => current[id] ? current : { ...current, [id]: defaultDraft(next) });
-    } catch (requestError) { setError(requestError.message); }
+    } catch (requestError) {
+      if (signal?.aborted || requestError.name === "AbortError" || !mountedRef.current) return;
+      setError(requestError.message);
+    }
   }, []);
 
-  useEffect(() => {
-    if (!jobs.some((job) => (job.stages?.crop?.status === "approved" && ["processing", "pending", "queued"].includes(job.stages?.garment?.status)) || ["processing", "queued"].includes(job.stages?.modeled?.status) || (job.stages?.garment?.status === "approved" && job.stages?.modeled?.status === "pending"))) return undefined;
-    const timer = setInterval(() => jobs.forEach((job) => refresh(job.id)), 900);
-    return () => clearInterval(timer);
-  }, [jobs, refresh]);
+  const processingJobIds = jobs
+    .filter(isProcessingJob)
+    .map((job) => job.id)
+    .sort()
+    .join(",");
 
-  // Keep the user's selection sticky. Only auto-pick when nothing is selected.
   useEffect(() => {
-    if (selectedReviewId) {
-      if (!jobs.some((job) => job.id === selectedReviewId)) {
-        setSelectedReviewId(null);
-      }
-      return;
-    }
-    const firstReviewable = jobs.find((job) => isReviewable(job));
-    if (firstReviewable) setSelectedReviewId(firstReviewable.id);
-  }, [jobs, selectedReviewId]);
+    if (!processingJobIds) return undefined;
+    const ids = processingJobIds.split(",");
+    let activeController = null;
+    const timer = setInterval(() => {
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      ids.forEach((id) => {
+        void refresh(id, controller.signal);
+      });
+    }, 900);
+    return () => {
+      activeController?.abort();
+      clearInterval(timer);
+    };
+  }, [processingJobIds, refresh]);
 
   const selectReviewJob = useCallback((jobId) => {
     setSelectedReviewId(jobId);
@@ -394,10 +450,16 @@ export function WardrobeImportFlow({
       const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const previewUrl = URL.createObjectURL(file);
       const pendingName = file.name.replace(/\.[^.]+$/, "") || "New piece";
+      if (!mountedRef.current) {
+        URL.revokeObjectURL(previewUrl);
+        return;
+      }
       setPendingUploads((current) => [...current, { id: pendingId, name: pendingName, previewUrl }]);
       try {
         const imageDataUrl = await fileToDataUrl(file);
+        if (!mountedRef.current) return;
         const result = await api(API, { method: "POST", body: JSON.stringify({ imageDataUrl, metadata: { name: pendingName } }) });
+        if (!mountedRef.current) return;
         const createdJobs = result.jobs || [result];
         if (!createdJobs.length && result.noClothingDetected) {
           setNotice({ tone: "complete", text: "No clothing detected", detail: `We couldn’t find a distinct wearable item in ${file.name}. Try a clearer or more tightly framed image.` });
@@ -406,9 +468,11 @@ export function WardrobeImportFlow({
         setJobs((current) => [...current, ...createdJobs]);
         setDrafts((current) => ({ ...current, ...Object.fromEntries(createdJobs.map((job) => [job.id, defaultDraft(job)])) }));
       } catch (requestError) {
-        setError(requestError.message);
+        if (mountedRef.current) setError(requestError.message);
       } finally {
-        setPendingUploads((current) => current.filter((entry) => entry.id !== pendingId));
+        if (mountedRef.current) {
+          setPendingUploads((current) => current.filter((entry) => entry.id !== pendingId));
+        }
         URL.revokeObjectURL(previewUrl);
       }
     }
@@ -554,10 +618,13 @@ export function WardrobeImportFlow({
     : null;
   const readyCount = jobs.filter((job) => deriveStatus(job).tone === "ready").length;
   const importProcessingCount = jobs.filter((job) => deriveStatus(job).tone === "processing").length + pendingCount;
-  const selectedJob = selectedReviewId ? jobs.find((job) => job.id === selectedReviewId) || null : null;
+  const firstReviewable = jobs.find((job) => isReviewable(job));
+  const effectiveSelectedId = selectedReviewId && jobs.some((job) => job.id === selectedReviewId)
+    ? selectedReviewId
+    : (firstReviewable?.id ?? null);
+  const selectedJob = effectiveSelectedId ? jobs.find((job) => job.id === effectiveSelectedId) || null : null;
   const reviewJob = selectedJob && isReviewable(selectedJob) ? selectedJob : null;
   const reviewStage = reviewJob ? reviewStageFor(reviewJob) : null;
-  const progress = 0;
   const hasImportActivity = Boolean(jobs.length || pendingCount || notice || setupRequired);
   const hasCompletionBadge = completionCount > 0;
   const hasActivity = hasImportActivity || backgroundCount > 0 || hasCompletionBadge;
@@ -873,7 +940,7 @@ export function WardrobeImportFlow({
               {completionPanel}
               {(jobs.length > 0 || pendingCount > 0) && (
                 <>
-                  <div className={`import-progress${showProcessingBar && importStatus?.tone === "processing" ? (progress < 100 ? " is-indeterminate" : "") : " is-reviewing"}`}>
+                  <div className={`import-progress${showProcessingBar && importStatus?.tone === "processing" ? " is-indeterminate" : " is-reviewing"}`}>
                     <div className="import-progress__meta">
                       <span>{mixedBusyStatus?.text || importStatus?.text || backgroundStatus?.text}</span>
                       <span>
@@ -888,7 +955,7 @@ export function WardrobeImportFlow({
                         ].filter(Boolean).join(" · ")}
                       </span>
                     </div>
-                    {showProcessingBar && <div className="import-progress__track"><div className="import-progress__bar" style={{ "--import-progress": `${progress}%` }} /></div>}
+                    {showProcessingBar && <div className="import-progress__track"><div className="import-progress__bar" /></div>}
                   </div>
                   {reviewJob && reviewStage ? (
                     <ReviewEditor
@@ -921,7 +988,7 @@ export function WardrobeImportFlow({
                       const failedStage = job.stages?.garment?.status === "failed" ? "garment" : job.stages?.modeled?.status === "failed" ? "modeled" : null;
                       const previewSrc = job.stages?.garment?.assetUrl || job.stages?.garment?.failedAssetUrl || job.stages?.crop?.assetUrl || job.originalAssetUrl;
                       const isProcessing = status.tone === "processing";
-                      const selected = selectedReviewId === job.id;
+                      const selected = effectiveSelectedId === job.id;
                       const canSelect = isReviewable(job) || isProcessing || status.tone === "error";
                       const generatingAsset = isProcessing && (
                         job.stages?.crop?.status === "approved"

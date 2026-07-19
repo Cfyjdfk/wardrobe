@@ -12,14 +12,6 @@ import {
   sortGarmentsByPart,
 } from "./prompts.mjs";
 
-export {
-  buildGarmentPrompt,
-  buildModeledPrompt,
-  buildOutfitPrompt,
-  outfitNameFromGarments,
-  sortGarmentsByPart,
-} from "./prompts.mjs";
-
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
 const LIBRARY_ASSET_ROOT = "/api/import/library";
@@ -53,10 +45,6 @@ function publicJob(job) {
   const copy = structuredClone(job);
   delete copy.internal;
   return copy;
-}
-
-function extension(mime = "image/png") {
-  return ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" })[mime] || "png";
 }
 
 function decodeImage(input) {
@@ -173,7 +161,7 @@ function removeKeyedSpill(data, index, keyedChannels, neutralLevel) {
   }
 }
 
-export async function processChromaBackground(bytes, key, options = {}) {
+async function processChromaBackground(bytes, key, options = {}) {
   const tolerance = cleanupTolerance(options.tolerance);
   const feather = 80;
   const target = [1, 3, 5].map((offset) => Number.parseInt(key.slice(offset, offset + 2), 16));
@@ -234,7 +222,7 @@ export async function processChromaBackground(bytes, key, options = {}) {
   return { bytes: output, verification, tolerance };
 }
 
-export async function removeChromaBackground(bytes, key, options = {}) {
+async function removeChromaBackground(bytes, key, options = {}) {
   const result = await processChromaBackground(bytes, key, options);
   if (options.strict !== false && result.verification.contaminatedPixels > 1) {
     throw new Error(`Background cleanup left ${result.verification.contaminatedPixels} chroma-contaminated pixels`);
@@ -242,7 +230,7 @@ export async function removeChromaBackground(bytes, key, options = {}) {
   return result.bytes;
 }
 
-export async function frameTransparentGarment(bytes, canvasSize = 1024, occupancy = 0.88) {
+async function frameTransparentGarment(bytes, canvasSize = 1024, occupancy = 0.88) {
   const { data, info } = await sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   let minX = info.width;
   let minY = info.height;
