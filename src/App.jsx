@@ -1187,7 +1187,7 @@ function TagEditor({ tags, onChange, compact = false }) {
               addTag();
             }
           }}
-          placeholder={compact ? "e.g. tucked shirt, evening" : "Add a detail"}
+          placeholder={compact ? "e.g. casual, collared, slim" : "e.g. navy, polo, relaxed-fit"}
           aria-label="Add detail tag"
         />
         <button type="button" onClick={addTag} disabled={!input.trim()} aria-label="Add detail">
