@@ -244,6 +244,25 @@ function promptMatchScore(item, promptText = "") {
     .reduce((score, word) => score + (haystack.includes(word) ? 1 : 0), 0);
 }
 
+/** Euclidean RGB distance between two hex colours. Higher = more contrast. */
+export function hexColorDistance(first, second) {
+  const a = parseHexRgb(first);
+  const b = parseHexRgb(second);
+  if (!a || !b) return Infinity;
+  return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+}
+
+/** Layered pieces need readable contrast; near-identical navy/navy hexes fail this. */
+export const LAYER_COLOR_MIN_DISTANCE = 55;
+
+export function colorsTooSimilar(first, second, minDistance = LAYER_COLOR_MIN_DISTANCE) {
+  return hexColorDistance(first, second) < minDistance;
+}
+
+function primaryHex(item) {
+  return typeof item?.color === "string" ? item.color : null;
+}
+
 /**
  * After the model suggests an outfit, ensure every required part is present.
  * Picks the best unused catalog item for each missing part (name/tag match preferred).
@@ -262,6 +281,49 @@ export function ensureRequiredParts(garments = [], requiredParts = [], pool = []
     next.push(pick);
     usedIds.add(pick.id);
     present.add(part);
+  }
+
+  return sortGarmentsByPart(next);
+}
+
+/**
+ * If a top + outer layer share near-identical primary hexes, swap one for a
+ * higher-contrast catalog alternative when available (prompt match still counts).
+ */
+export function improveOutfitColorPairing(garments = [], pool = [], prompt = "") {
+  const next = [...garments];
+  const topIndex = next.findIndex((item) => item.part === "upperbody");
+  const outerIndex = next.findIndex((item) => item.part === "wholebody_up");
+  if (topIndex < 0 || outerIndex < 0) return sortGarmentsByPart(next);
+
+  const top = next[topIndex];
+  const outer = next[outerIndex];
+  if (!colorsTooSimilar(primaryHex(top), primaryHex(outer))) return sortGarmentsByPart(next);
+
+  const usedIds = new Set(next.map((item) => item.id));
+  const scoreSwap = (candidate, anchor) => {
+    const distance = hexColorDistance(primaryHex(candidate), primaryHex(anchor));
+    if (distance < LAYER_COLOR_MIN_DISTANCE) return -Infinity;
+    return distance + promptMatchScore(candidate, prompt) * 12;
+  };
+
+  const outerCandidates = pool
+    .filter((item) => item.part === "wholebody_up" && !usedIds.has(item.id))
+    .map((item) => ({ item, score: scoreSwap(item, top) }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((a, b) => b.score - a.score);
+
+  const topCandidates = pool
+    .filter((item) => item.part === "upperbody" && !usedIds.has(item.id))
+    .map((item) => ({ item, score: scoreSwap(item, outer) }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((a, b) => b.score - a.score);
+
+  // Prefer replacing the outer layer so the base top stays unless only the top can fix contrast.
+  if (outerCandidates[0]) {
+    next[outerIndex] = outerCandidates[0].item;
+  } else if (topCandidates[0]) {
+    next[topIndex] = topCandidates[0].item;
   }
 
   return sortGarmentsByPart(next);
@@ -297,6 +359,9 @@ Rules:
 - If the request names a part explicitly or by a clear synonym (e.g. "jacket" or "coat" both mean wholebody_up), you must include a matching catalog item for that part in garmentIds, and list that part's id in requiredParts. Skip this only if the wardrobe truly has no item for that part.
 - requiredParts should otherwise be empty — don't list a part just because you chose to include it for style reasons.
 - When the user names a color (e.g. "red"), prefer garments whose colorFamilies include that color or a close synonym (burgundy/maroon/wine count as red; navy counts as blue). Do not ignore a matching piece just because the hex looks dark.
+- Color pairing by hex (important): compare each item's primary color hex, not only colorFamilies. Shared family labels like "navy"/"blue" do NOT mean two pieces pair well.
+- Never stack upperbody + wholebody_up when their primary hexes are near-identical (RGB distance under ~55). Example bad pair: navy T shirt #1f355f under navy quarter-zip sweater #163c79 — both read as the same block of navy. Prefer clear contrast so the top stays visible under the outer layer (light/cream/white/beige under dark navy; or a clearly different hue).
+- Top + bottom may be intentionally monochrome. Layered outerwear must contrast with the top.
 - Prefer color/tag harmony and the user's vibe (office, casual, etc.).
 
 User request: ${userPrompt}

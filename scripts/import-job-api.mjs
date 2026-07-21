@@ -10,6 +10,7 @@ import {
   buildOutfitPrompt,
   buildOutfitSuggestPrompt,
   ensureRequiredParts,
+  improveOutfitColorPairing,
   outfitNameFromGarments,
   sortGarmentsByPart,
 } from "./prompts.mjs";
@@ -1140,7 +1141,9 @@ export function wardrobeImportApi(options = {}) {
         }
 
         // Safety net: if the model listed a required part but its own garmentIds omitted it, fill the gap deterministically.
-        const ordered = ensureRequiredParts(garments, requiredParts, ownedRecords, prompt);
+        const withRequired = ensureRequiredParts(garments, requiredParts, ownedRecords, prompt);
+        // Hex pairing safety net: avoid near-identical navy/navy top + outer layer stacks.
+        const ordered = improveOutfitColorPairing(withRequired, ownedRecords, prompt);
         const missingRequired = requiredParts.filter((part) => !ordered.some((item) => item.part === part));
         if (missingRequired.length) {
           const missingLabels = missingRequired.map((part) => PART_LABEL[part] || part).join(", ");
