@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowCounterClockwise, Check, Plus, ShoppingBag, Sparkle, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
+import { useApiError } from "./ApiErrorModal.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
 import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import "./import-flow.css";
@@ -236,6 +237,7 @@ export function WardrobeImportFlow({
   onDeleteOutfit,
   onOpenCompletion,
 }) {
+  const { showApiError } = useApiError();
   const inputRef = useRef(null);
   const mountedRef = useRef(true);
   const pendingUploadsRef = useRef([]);
@@ -249,7 +251,6 @@ export function WardrobeImportFlow({
   const [open, setOpen] = useState(false);
   const [selectedReviewId, setSelectedReviewId] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const [error, setError] = useState("");
   const [notice, setNotice] = useState(null);
   const [setup, setSetup] = useState(null);
   const [completionItems, setCompletionItems] = useState([]);
@@ -279,6 +280,7 @@ export function WardrobeImportFlow({
       .catch((requestError) => {
         if (controller.signal.aborted || requestError.name === "AbortError") return;
         setSetup({ ready: false, error: requestError.message });
+        showApiError(requestError, { title: "Could not load import setup", fallback: "Could not load import setup." });
       });
     api(API, { signal: controller.signal })
       .then((storedJobs) => {
@@ -289,9 +291,10 @@ export function WardrobeImportFlow({
       })
       .catch((requestError) => {
         if (controller.signal.aborted || requestError.name === "AbortError") return;
+        showApiError(requestError, { title: "Could not load imports", fallback: "Could not load import jobs." });
       });
     return () => controller.abort();
-  }, []);
+  }, [showApiError]);
 
   const refresh = useCallback(async (id, signal) => {
     try {
@@ -300,8 +303,8 @@ export function WardrobeImportFlow({
       setJobs((current) => current.map((job) => job.id === id ? next : job));
       setDrafts((current) => current[id] ? current : { ...current, [id]: defaultDraft(next) });
     } catch (requestError) {
+      // Polling refresh failures are ignored to avoid modal spam; user actions surface errors themselves.
       if (signal?.aborted || requestError.name === "AbortError" || !mountedRef.current) return;
-      setError(requestError.message);
     }
   }, []);
 
@@ -445,7 +448,7 @@ export function WardrobeImportFlow({
     if (!setup?.ready) { setOpen(true); return; }
     const images = [...files].filter((file) => file.type.startsWith("image/"));
     if (!images.length) return;
-    setDragging(false); setError(""); setNotice(null);
+    setDragging(false); setNotice(null);
     for (const file of images) {
       const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const previewUrl = URL.createObjectURL(file);
@@ -468,7 +471,9 @@ export function WardrobeImportFlow({
         setJobs((current) => [...current, ...createdJobs]);
         setDrafts((current) => ({ ...current, ...Object.fromEntries(createdJobs.map((job) => [job.id, defaultDraft(job)])) }));
       } catch (requestError) {
-        if (mountedRef.current) setError(requestError.message);
+        if (mountedRef.current) {
+          showApiError(requestError, { title: "Import failed", fallback: "Could not start the import." });
+        }
       } finally {
         if (mountedRef.current) {
           setPendingUploads((current) => current.filter((entry) => entry.id !== pendingId));
@@ -476,7 +481,7 @@ export function WardrobeImportFlow({
         URL.revokeObjectURL(previewUrl);
       }
     }
-  }, [setup]);
+  }, [setup, showApiError]);
 
   useEffect(() => {
     let depth = 0;
@@ -490,7 +495,7 @@ export function WardrobeImportFlow({
   }, [submitFiles]);
 
   const perform = async (job, stage, action, prompt = "") => {
-    setBusyId(job.id); setError("");
+    setBusyId(job.id);
     try {
       if (stage === "garment" && action === "approve") {
         const draft = drafts[job.id];
@@ -533,24 +538,30 @@ export function WardrobeImportFlow({
           onModeledApproved?.(job.id, `/api/import/library/${wardrobeId}-modeled.png`, costs);
         }
       }
-    } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+    } catch (requestError) {
+      showApiError(requestError, { title: "Import action failed", fallback: "The import job could not be updated." });
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const performCleanup = async (job, action, requestedTolerance) => {
-    setBusyId(job.id); setError("");
+    setBusyId(job.id);
     try {
       const tolerance = requestedTolerance ?? cleanupTolerances[job.id] ?? job.stages?.garment?.cleanupTolerance ?? 46;
       const updated = await api(`${API}/${job.id}/stages/garment/cleanup-${action}`, { method: "POST", body: JSON.stringify({ tolerance }) });
       setJobs((current) => current.map((item) => item.id === job.id ? updated : item));
       setCleanupTolerances((current) => ({ ...current, [job.id]: updated.stages?.garment?.cleanupTolerance ?? tolerance }));
       setSelectedReviewId(job.id);
-    } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+    } catch (requestError) {
+      showApiError(requestError, { title: "Cleanup failed", fallback: "Could not update garment cleanup." });
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const deleteJob = async (job) => {
-    setBusyId(job.id); setError("");
+    setBusyId(job.id);
     try {
       await api(`${API}/${job.id}`, { method: "DELETE" });
       const remaining = jobs.filter((item) => item.id !== job.id);
@@ -558,8 +569,11 @@ export function WardrobeImportFlow({
       setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== job.id)));
       if (selectedReviewId === job.id) setSelectedReviewId(null);
       setDeleteConfirm(null);
-    } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+    } catch (requestError) {
+      showApiError(requestError, { title: "Could not delete import", fallback: "Could not delete the import job." });
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const requestDeleteJob = (job) => {
@@ -1046,7 +1060,6 @@ export function WardrobeImportFlow({
               </div>
             </>
           )}
-          {error && <p className="import-status is-error" role="alert">{error}</p>}
         </section>
       </div>
       {deleteConfirm?.kind === "job" && (

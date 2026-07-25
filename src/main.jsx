@@ -1,11 +1,14 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { ApiErrorProvider } from "./ApiErrorModal.jsx";
 import { App } from "./App.jsx";
 import "./styles.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <ApiErrorProvider>
+      <App />
+    </ApiErrorProvider>
   </React.StrictMode>,
 );
 

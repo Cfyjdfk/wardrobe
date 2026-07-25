@@ -1971,6 +1971,22 @@ button.modeled-hero-zoom {
   z-index: 140;
 }
 
+.error-modal-backdrop {
+  z-index: 150;
+}
+
+.error-modal .confirm-modal-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.error-modal .confirm-modal-title svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
 .confirm-delete-button {
   background: var(--accent) !important;
   border-color: var(--accent) !important;

@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { ArrowClockwise, ArrowLeft, CaretLeft, CaretRight, MagicWand, MagnifyingGlass, PaperPlaneTilt, Plus, ShoppingBag, Sparkle, Trash, X } from "@phosphor-icons/react";
 import Fuse from "fuse.js";
 import { WardrobeImportFlow } from "./import-flow.jsx";
+import { useApiError } from "./ApiErrorModal.jsx";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal.jsx";
 import { ImageZoomLightbox } from "./ImageZoomLightbox.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
@@ -916,6 +917,7 @@ const OutfitsPanel = memo(function OutfitsPanel({
 });
 
 function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext, gridColumns = 1 }) {
+  const { showApiError } = useApiError();
   const closeButtonRef = useRef(null);
   const mountedRef = useRef(true);
   const [name, setName] = useState(outfit.name || "");
@@ -957,12 +959,12 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
       return true;
     } catch (error) {
       if (!mountedRef.current) return false;
-      setSaveError(error.message || "Could not save the outfit.");
+      showApiError(error, { title: "Could not save outfit", fallback: "Could not save the outfit." });
       return false;
     } finally {
       if (mountedRef.current) setSaving(false);
     }
-  }, [name, onSave, outfit.id, outfit.name, savedTags, tags]);
+  }, [name, onSave, outfit.id, outfit.name, savedTags, showApiError, tags]);
 
   useEffect(() => {
     if (!isDirty) return undefined;
@@ -1126,8 +1128,7 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
               )}
             </div>
 
-            {saveError && <p className="outfit-viewer-error" role="alert">{saveError}</p>}
-            {saving && !saveError && <p className="autosave-notice" role="status">Saving…</p>}
+            {saving && <p className="autosave-notice" role="status">Saving…</p>}
 
             <div className="viewer-actions">
               <button className="delete-button" type="button" onClick={() => onDelete(outfit.id)}>
@@ -1333,6 +1334,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
 }
 
 function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext, gridColumns = 1 }) {
+  const { showApiError } = useApiError();
   const closeButtonRef = useRef(null);
   const samplingCanvasRef = useRef(null);
   const mountedRef = useRef(true);
@@ -1343,7 +1345,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [confirmKind, setConfirmKind] = useState(null);
   const [regenPrompt, setRegenPrompt] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
-  const [saveError, setSaveError] = useState("");
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
   const modeledStatus = item.modeledGeneration?.status || null;
@@ -1386,7 +1387,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
   const persistDraft = useCallback(async () => {
     if (!mountedRef.current) return;
-    setSaveError("");
     try {
       await onSave({
         ...item,
@@ -1397,9 +1397,9 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
       });
     } catch (error) {
       if (!mountedRef.current) return;
-      setSaveError(error.message || "Could not save the garment.");
+      showApiError(error, { title: "Could not save garment", fallback: "Could not save the garment." });
     }
-  }, [draft, item, onSave]);
+  }, [draft, item, onSave, showApiError]);
 
   useEffect(() => {
     if (!isDirty) return undefined;
@@ -1480,6 +1480,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     } catch (requestError) {
       if (!mountedRef.current) return;
       onGenerateModeled(item.id, { modeledGeneration: { status: "failed", error: requestError.message } });
+      showApiError(requestError, { title: "Modeled photo failed", fallback: "Could not generate a modeled photo." });
     }
   };
 
@@ -1504,6 +1505,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     } catch (requestError) {
       if (!mountedRef.current) return;
       onGenerateModeled(item.id, { garmentGeneration: { status: "failed", error: requestError.message } });
+      showApiError(requestError, { title: "Garment image failed", fallback: "Could not regenerate the garment." });
     }
   };
 
@@ -1725,8 +1727,6 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
           sampleStatus={sampleStatus}
         />
 
-        {saveError && <p className="outfit-viewer-error" role="alert">{saveError}</p>}
-
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
             <Trash size={15} weight="regular" aria-hidden="true" /> Delete
@@ -1752,6 +1752,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 }
 
 export function App() {
+  const { showApiError } = useApiError();
   const [items, setItems] = useState([]);
   const [libraryTab, setLibraryTab] = useState("garments");
   const [activeType, setActiveType] = useState("all");
@@ -1789,12 +1790,13 @@ export function App() {
       .catch((requestError) => {
         if (controller.signal.aborted || requestError.name === "AbortError") return;
         setError(requestError.message);
+        showApiError(requestError, { title: "Could not load wardrobe", fallback: "Could not load the wardrobe." });
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [showApiError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1807,9 +1809,12 @@ export function App() {
         if (controller.signal.aborted) return;
         setOutfits(Array.isArray(loadedOutfits) ? loadedOutfits : []);
       })
-      .catch(() => {});
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+        showApiError(requestError, { title: "Could not load outfits", fallback: "Could not load outfits." });
+      });
     return () => controller.abort();
-  }, []);
+  }, [showApiError]);
 
   const processingOutfitIds = outfits
     .filter((outfit) => outfit.status === "processing")
@@ -1829,7 +1834,17 @@ export function App() {
         .then((response) => (response.ok ? response.json() : null))
         .then((loadedOutfits) => {
           if (cancelled || controller.signal.aborted || !Array.isArray(loadedOutfits)) return;
-          setOutfits(loadedOutfits);
+          let failedOutfit = null;
+          setOutfits((current) => {
+            const previousById = new Map(current.map((outfit) => [outfit.id, outfit]));
+            failedOutfit = loadedOutfits.find((outfit) => (
+              previousById.get(outfit.id)?.status === "processing" && outfit.status === "failed"
+            )) || null;
+            return loadedOutfits;
+          });
+          if (failedOutfit) {
+            showApiError(failedOutfit.error || "Could not generate the outfit.", { title: "Outfit generation failed" });
+          }
         })
         .catch(() => {});
     }, 1200);
@@ -1838,7 +1853,7 @@ export function App() {
       activeController?.abort();
       clearInterval(timer);
     };
-  }, [processingOutfitIds]);
+  }, [processingOutfitIds, showApiError]);
 
   const processingGenerationIds = items
     .filter((item) => item.modeledGeneration?.status === "processing" || item.garmentGeneration?.status === "processing")
@@ -1863,6 +1878,7 @@ export function App() {
         )
       ).then((records) => {
         if (cancelled || controller.signal.aborted) return;
+        const failures = [];
         setItems((current) => {
           let changed = false;
           const next = current.map((item) => {
@@ -1878,6 +1894,18 @@ export function App() {
             ) {
               return item;
             }
+            if (item.modeledGeneration?.status === "processing" && record.modeledGeneration?.status === "failed") {
+              failures.push({
+                title: "Modeled photo failed",
+                message: record.modeledGeneration.error || "Could not generate a modeled photo.",
+              });
+            }
+            if (item.garmentGeneration?.status === "processing" && record.garmentGeneration?.status === "failed") {
+              failures.push({
+                title: "Garment image failed",
+                message: record.garmentGeneration.error || "Could not regenerate the garment.",
+              });
+            }
             changed = true;
             return {
               ...item,
@@ -1891,6 +1919,9 @@ export function App() {
           });
           return changed ? next : current;
         });
+        if (!cancelled && failures[0]) {
+          showApiError(failures[0].message, { title: failures[0].title });
+        }
       });
     }, 1200);
     return () => {
@@ -1898,7 +1929,7 @@ export function App() {
       activeController?.abort();
       clearInterval(timer);
     };
-  }, [processingGenerationIds]);
+  }, [processingGenerationIds, showApiError]);
 
   const selectedItem = items.find((item) => item.id === selectedId) || null;
   const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
@@ -2121,12 +2152,12 @@ export function App() {
       const response = await fetch(`/api/import/outfits/${id}`, { method: "DELETE" });
       if (!response.ok && response.status !== 404) throw new Error("Could not delete the outfit.");
     } catch (requestError) {
-      setError(requestError.message);
+      showApiError(requestError, { title: "Could not delete outfit", fallback: "Could not delete the outfit." });
       throw requestError;
     }
     setOutfits((current) => current.filter((outfit) => outfit.id !== id));
     setSelectedOutfitId(null);
-  }, []);
+  }, [showApiError]);
 
   const saveOutfit = useCallback(async (id, { name, tags }) => {
     const response = await fetch(`/api/import/outfits/${id}`, {
@@ -2169,7 +2200,7 @@ export function App() {
         const response = await fetch(`/api/import/wardrobe/${id}`, { method: "DELETE" });
         if (!response.ok && response.status !== 404) throw new Error("Could not delete the imported item.");
       } catch (requestError) {
-        setError(requestError.message);
+        showApiError(requestError, { title: "Could not delete garment", fallback: "Could not delete the imported item." });
         throw requestError;
       }
     }
@@ -2179,7 +2210,7 @@ export function App() {
     persistDeletedItem(id);
     setSelectedId(null);
     setReturnOutfitId(null);
-  }, []);
+  }, [showApiError]);
 
   const requestDeleteItem = useCallback((id) => {
     const item = items.find((entry) => entry.id === id);
@@ -2212,7 +2243,7 @@ export function App() {
       else await deleteItem(deleteConfirm.id);
       setDeleteConfirm(null);
     } catch {
-      // Errors are surfaced via setError inside the delete helpers.
+      // Errors are surfaced via the shared API error modal inside the delete helpers.
     } finally {
       setDeleteBusy(false);
     }
@@ -2308,11 +2339,11 @@ export function App() {
       setSuggestCost(result.cost || null);
       onSuccess?.();
     } catch (requestError) {
-      setComposerError(requestError.message);
+      showApiError(requestError, { title: "Could not suggest outfit", fallback: "Could not suggest an outfit." });
     } finally {
       setSuggestingOutfit(false);
     }
-  }, [setComposerFromIds, suggestingOutfit]);
+  }, [setComposerFromIds, showApiError, suggestingOutfit]);
 
   const generateOutfit = useCallback(async () => {
     if (composerItems.length < 2) return;
@@ -2334,9 +2365,9 @@ export function App() {
     } catch (requestError) {
       setComposerItems(snapshotItems);
       setComposerPrompt(prompt);
-      setComposerError(requestError.message);
+      showApiError(requestError, { title: "Could not generate outfit", fallback: "Could not generate the outfit." });
     }
-  }, [composerItems, composerPrompt]);
+  }, [composerItems, composerPrompt, showApiError]);
 
   return (
     <div className={`app-shell${selectedItem || selectedOutfit ? " has-selection" : ""}`}>
@@ -2451,8 +2482,6 @@ export function App() {
             ))}
           </nav>
         </header>
-
-        {error && <p className="status error">{error}</p>}
 
         <div className="library-panel" hidden={libraryTab !== "garments"}>
           <GarmentsPanel
