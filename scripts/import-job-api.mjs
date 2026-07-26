@@ -5,6 +5,7 @@ import sharp from "sharp";
 import {
   DEFAULT_OUTFIT_SETTING,
   PART_LABEL,
+  buildDuoOutfitPrompt,
   buildGarmentPrompt,
   buildModeledPrompt,
   buildOutfitPrompt,
@@ -19,6 +20,7 @@ const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
 const LIBRARY_ASSET_ROOT = "/api/import/library";
 const OUTFIT_ASSET_ROOT = "/api/import/outfit-images";
+const MODEL_ASSET_ROOT = "/api/import/model-images";
 const STAGES = new Set(["crop", "garment", "modeled"]);
 const DECISIONS = new Set(["approve", "reject"]);
 const PARTS = new Set(["upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes"]);
@@ -147,6 +149,121 @@ async function cropDetectedItem(bytes, boundingBox) {
   const right = Math.min(width, Math.ceil(rawLeft + rawWidth + padding));
   const bottom = Math.min(height, Math.ceil(rawTop + rawHeight + padding));
   return sharp(normalized).extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) }).png().toBuffer();
+}
+
+async function openAIDetectFaceBox({ key, baseUrl, model, image }) {
+  const response = await fetch(`${baseUrl}/responses`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      input: [{
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Locate the primary person's face in this photo for an avatar crop.",
+              "Return one tight bounding box around the face including a little hair and chin, using integer coordinates normalized to a 1000 by 1000 image.",
+              "x and y are the top-left corner, followed by width and height.",
+              "If multiple people are present, choose the most prominent / front-facing face.",
+              "If no face is clearly visible, return a centered upper-body head box as a best-effort fallback.",
+            ].join(" "),
+          },
+          { type: "input_image", image_url: `data:image/png;base64,${image.toString("base64")}` },
+        ],
+      }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "face_box",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              boundingBox: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  x: { type: "integer", minimum: 0, maximum: 999 },
+                  y: { type: "integer", minimum: 0, maximum: 999 },
+                  width: { type: "integer", minimum: 1, maximum: 1000 },
+                  height: { type: "integer", minimum: 1, maximum: 1000 },
+                },
+                required: ["x", "y", "width", "height"],
+              },
+            },
+            required: ["boundingBox"],
+          },
+        },
+      },
+    }),
+  });
+  const bodyText = await response.text();
+  let result = {};
+  try { result = bodyText ? JSON.parse(bodyText) : {}; }
+  catch { result = {}; }
+  if (!response.ok) throw openaiFailureError("analysis", response.status, bodyText, result);
+  const outputText = result.output_text || result.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
+  if (!outputText) throw Object.assign(new Error("OpenAI face detection returned no structured result"), { detail: bodyText.slice(0, 2000) || null });
+  const parsed = JSON.parse(outputText);
+  return normalizeBoundingBox(parsed.boundingBox);
+}
+
+async function applyCircularMask(squareBytes, size = 512) {
+  const resized = await sharp(squareBytes)
+    .resize(size, size, { fit: "cover", position: "centre" })
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+  const circleSvg = Buffer.from(
+    `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#fff"/></svg>`,
+  );
+  return sharp(resized)
+    .composite([{ input: circleSvg, blend: "dest-in" }])
+    .png()
+    .toBuffer();
+}
+
+async function createCircularFacePreview(bytes, { key = "", baseUrl = "", visionModel = "gpt-5.4-mini" } = {}) {
+  const normalized = await normalizeImage(bytes);
+  const { width, height } = await sharp(normalized).metadata();
+  let box = null;
+  if (key) {
+    try {
+      box = await openAIDetectFaceBox({ key, baseUrl, model: visionModel, image: normalized });
+    } catch {
+      box = null;
+    }
+  }
+  let extract;
+  if (box) {
+    const rawLeft = (box.x / 1000) * width;
+    const rawTop = (box.y / 1000) * height;
+    const rawWidth = (box.width / 1000) * width;
+    const rawHeight = (box.height / 1000) * height;
+    const side = Math.max(rawWidth, rawHeight) * 1.35;
+    const centerX = rawLeft + rawWidth / 2;
+    const centerY = rawTop + rawHeight / 2;
+    const left = Math.max(0, Math.floor(centerX - side / 2));
+    const top = Math.max(0, Math.floor(centerY - side / 2));
+    const widthPx = Math.min(width - left, Math.ceil(side));
+    const heightPx = Math.min(height - top, Math.ceil(side));
+    const squareSide = Math.min(widthPx, heightPx);
+    extract = { left, top, width: squareSide, height: squareSide };
+  } else {
+    const side = Math.min(width, height);
+    extract = {
+      left: Math.max(0, Math.floor((width - side) / 2)),
+      top: Math.max(0, Math.floor(height * 0.08)),
+      width: side,
+      height: Math.min(side, height),
+    };
+    if (extract.top + extract.height > height) extract.top = Math.max(0, height - extract.height);
+  }
+  const square = await sharp(normalized).extract(extract).png().toBuffer();
+  return applyCircularMask(square, 512);
 }
 
 function chooseChromaKey(primary = "#808080") {
@@ -547,10 +664,188 @@ export function wardrobeImportApi(options = {}) {
   let libraryAssetDir;
   let outfitsFile;
   let outfitAssetDir;
+  let modelsFile;
+  let modelAssetDir;
   let errorsFile;
   const running = new Map();
   const setting = (name, fallback = "") => options.env?.[name] || process.env[name] || fallback;
   const apiBaseUrl = () => setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1").replace(/\/$/, "");
+
+  function modelImageUrl(id, version = Date.now()) {
+    return `${MODEL_ASSET_ROOT}/${id}.png?v=${version}`;
+  }
+
+  function modelPreviewUrl(id, version = Date.now()) {
+    return `${MODEL_ASSET_ROOT}/${id}-preview.png?v=${version}`;
+  }
+
+  function modelImagePath(id) {
+    return path.join(modelAssetDir, `${id}.png`);
+  }
+
+  function modelPreviewPath(id) {
+    return path.join(modelAssetDir, `${id}-preview.png`);
+  }
+
+  async function writeModelAssets(id, sourceBytes) {
+    const png = await sharp(sourceBytes).png().toBuffer();
+    await mkdir(modelAssetDir, { recursive: true });
+    await writeFile(modelImagePath(id), png);
+    const preview = await createCircularFacePreview(png, {
+      key: setting("OPENAI_API_KEY").trim(),
+      baseUrl: apiBaseUrl(),
+      visionModel: setting("OPENAI_VISION_MODEL", "gpt-5.4-mini"),
+    });
+    await writeFile(modelPreviewPath(id), preview);
+    const version = Date.now();
+    return {
+      image: modelImageUrl(id, version),
+      preview: modelPreviewUrl(id, version),
+    };
+  }
+
+  async function loadModelsDocument() {
+    try {
+      const document = JSON.parse(await readFile(modelsFile, "utf8"));
+      const models = Array.isArray(document?.models) ? document.models : [];
+      return {
+        version: Number(document?.version) || 1,
+        defaultModelId: typeof document?.defaultModelId === "string" ? document.defaultModelId : null,
+        models,
+      };
+    } catch (error) {
+      if (error.code === "ENOENT") return { version: 1, defaultModelId: null, models: [] };
+      throw error;
+    }
+  }
+
+  async function saveModelsDocument(document) {
+    await atomicJson(modelsFile, {
+      version: document.version || 1,
+      defaultModelId: document.defaultModelId || null,
+      models: document.models || [],
+    });
+  }
+
+  async function legacyModelReferencePath() {
+    const referenceSetting = setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png");
+    return path.resolve(root, referenceSetting);
+  }
+
+  async function ensureModelPreview(model) {
+    if (!model?.id) return model;
+    try {
+      await stat(modelPreviewPath(model.id));
+      if (model.preview) return model;
+      return { ...model, preview: modelPreviewUrl(model.id, Date.now()) };
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    try {
+      // Backfill without OpenAI so listing models stays fast; add/replace generate face-aware previews.
+      const source = await readFile(modelImagePath(model.id));
+      const preview = await createCircularFacePreview(source);
+      await writeFile(modelPreviewPath(model.id), preview);
+      return { ...model, preview: modelPreviewUrl(model.id, Date.now()) };
+    } catch {
+      return model;
+    }
+  }
+
+  async function ensureModelsSeeded() {
+    await mkdir(modelAssetDir, { recursive: true });
+    const document = await loadModelsDocument();
+    if (document.models.length) {
+      let changed = false;
+      if (!document.defaultModelId || !document.models.some((model) => model.id === document.defaultModelId)) {
+        document.defaultModelId = document.models[0].id;
+        changed = true;
+      }
+      const models = [];
+      for (const model of document.models) {
+        const next = await ensureModelPreview(model);
+        if (next.preview !== model.preview) changed = true;
+        models.push(next);
+      }
+      document.models = models;
+      if (changed) await saveModelsDocument(document);
+      return document;
+    }
+
+    const legacyPath = await legacyModelReferencePath();
+    try {
+      if (!(await stat(legacyPath)).isFile()) return document;
+    } catch (error) {
+      if (error.code === "ENOENT") return document;
+      throw error;
+    }
+
+    const id = `model-${randomUUID()}`;
+    const now = new Date().toISOString();
+    const legacyBytes = await readFile(legacyPath);
+    const png = await sharp(legacyBytes).png().toBuffer();
+    await writeFile(modelImagePath(id), png);
+    const preview = await createCircularFacePreview(png);
+    await writeFile(modelPreviewPath(id), preview);
+    const version = Date.parse(now) || Date.now();
+    const seeded = {
+      version: 1,
+      defaultModelId: id,
+      models: [{
+        id,
+        name: "Default",
+        image: modelImageUrl(id, version),
+        preview: modelPreviewUrl(id, version),
+        createdAt: now,
+        updatedAt: now,
+      }],
+    };
+    await saveModelsDocument(seeded);
+    return seeded;
+  }
+
+  async function resolveModelFile(modelId) {
+    const document = await ensureModelsSeeded();
+    const model = document.models.find((entry) => entry.id === modelId);
+    if (!model) {
+      throw Object.assign(new Error(`Model not found: ${modelId}`), { status: 404 });
+    }
+    const filePath = modelImagePath(model.id);
+    try {
+      await stat(filePath);
+      return { model, filePath, document };
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    // Fall back to legacy env path for the default model only (migration safety).
+    if (model.id === document.defaultModelId) {
+      const legacyPath = await legacyModelReferencePath();
+      try {
+        await stat(legacyPath);
+        return { model, filePath: legacyPath, document };
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    throw Object.assign(new Error(`Model image missing for ${model.name || model.id}.`), { status: 409 });
+  }
+
+  async function resolveDefaultModelFile() {
+    const document = await ensureModelsSeeded();
+    if (!document.defaultModelId) {
+      const legacyPath = await legacyModelReferencePath();
+      try {
+        await stat(legacyPath);
+        return { model: null, filePath: legacyPath, document };
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          throw Object.assign(new Error("No default model is configured. Add a model in the Models tab."), { status: 503 });
+        }
+        throw error;
+      }
+    }
+    return resolveModelFile(document.defaultModelId);
+  }
 
   async function loadErrorsDocument() {
     try {
@@ -602,19 +897,32 @@ export function wardrobeImportApi(options = {}) {
 
   async function setupStatus() {
     const hasApiKey = Boolean(setting("OPENAI_API_KEY").trim());
-    const referenceSetting = setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png");
-    const referencePath = path.resolve(root, referenceSetting);
+    const document = await ensureModelsSeeded();
     let hasModelReference = false;
-    try {
-      hasModelReference = (await stat(referencePath)).isFile();
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+    let defaultModel = null;
+    if (document.defaultModelId) {
+      defaultModel = document.models.find((model) => model.id === document.defaultModelId) || null;
+      try {
+        const { filePath } = await resolveDefaultModelFile();
+        hasModelReference = (await stat(filePath)).isFile();
+      } catch {
+        hasModelReference = false;
+      }
+    } else {
+      try {
+        hasModelReference = (await stat(await legacyModelReferencePath())).isFile();
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
     }
     return {
       ready: hasApiKey && hasModelReference,
       hasApiKey,
       hasModelReference,
-      modelReference: referenceSetting,
+      hasDefaultModel: hasModelReference,
+      defaultModelId: document.defaultModelId,
+      defaultModelName: defaultModel?.name || null,
+      modelReference: defaultModel?.image || setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"),
     };
   }
 
@@ -803,7 +1111,7 @@ export function wardrobeImportApi(options = {}) {
     return task;
   }
 
-  async function generateModeledImageBytes(record, direction) {
+  async function generateModeledImageBytes(record, direction, modelId = null) {
     const key = setting("OPENAI_API_KEY");
     if (!key) throw new Error("OPENAI_API_KEY is not configured");
     const garmentFile = path.join(libraryAssetDir, `${record.id}-garment.png`);
@@ -814,12 +1122,18 @@ export function wardrobeImportApi(options = {}) {
       if (error.code === "ENOENT") throw Object.assign(new Error("This item's garment image is missing, so a modeled photo cannot be generated."), { status: 409 });
       throw error;
     }
-    const modelPath = path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"));
+    const resolved = modelId
+      ? await resolveModelFile(modelId)
+      : await resolveDefaultModelFile();
     let modelData;
     try {
-      modelData = await readFile(modelPath);
+      modelData = await readFile(resolved.filePath);
     } catch (error) {
-      if (error.code === "ENOENT") throw new Error(`Model reference not found at ${modelPath}. Set WARDROBE_MODEL_REFERENCE or add data/model-reference.png.`);
+      if (error.code === "ENOENT") {
+        throw new Error(modelId
+          ? "Selected model reference image is missing. Replace it in the Models tab."
+          : "Default model reference image is missing. Add or replace a model in the Models tab.");
+      }
       throw error;
     }
     const garment = { data: garmentData, mime: "image/png", name: "garment.png" };
@@ -840,7 +1154,7 @@ export function wardrobeImportApi(options = {}) {
     return updated;
   }
 
-  function generateModeledForWardrobeItem(id, direction) {
+  function generateModeledForWardrobeItem(id, direction, modelId = null) {
     const lock = `wardrobe:${id}:modeled`;
     if (running.has(lock)) return running.get(lock);
     const task = (async () => {
@@ -848,7 +1162,7 @@ export function wardrobeImportApi(options = {}) {
         const records = await loadImported();
         const record = records.find((item) => item.id === id);
         if (!record) return;
-        const { bytes, cost } = await generateModeledImageBytes(record, direction);
+        const { bytes, cost } = await generateModeledImageBytes(record, direction, modelId);
         const assetName = `${id}-modeled.png`;
         await writeFile(path.join(libraryAssetDir, assetName), bytes);
         const modeledImage = `${LIBRARY_ASSET_ROOT}/${assetName}?v=${Date.now()}`;
@@ -896,31 +1210,84 @@ export function wardrobeImportApi(options = {}) {
     throw Object.assign(new Error(`Garment image missing for ${record.name || record.id}.`), { status: 409 });
   }
 
-  async function generateOutfitImageBytes(outfit, garments) {
+  async function resolveOutfitLooks(outfit, records) {
+    const looksInput = Array.isArray(outfit.looks) && outfit.looks.length
+      ? outfit.looks
+      : [{
+          modelId: Array.isArray(outfit.modelIds) ? outfit.modelIds[0] : null,
+          garmentIds: outfit.garmentIds || [],
+        }];
+
+    const looks = [];
+    for (const look of looksInput) {
+      const garmentIds = Array.isArray(look.garmentIds) ? look.garmentIds : [];
+      const garments = garmentIds
+        .map((garmentId) => records.find((item) => item.id === garmentId))
+        .filter(Boolean);
+      if (garments.length < 2) {
+        throw new Error("This outfit is missing garments from the wardrobe.");
+      }
+      let modelId = typeof look.modelId === "string" ? look.modelId : null;
+      let modelFile;
+      if (modelId) {
+        modelFile = await resolveModelFile(modelId);
+      } else {
+        modelFile = await resolveDefaultModelFile();
+        modelId = modelFile.model?.id || null;
+      }
+      looks.push({
+        modelId,
+        model: modelFile.model,
+        modelPath: modelFile.filePath,
+        garments: sortGarmentsByPart(garments),
+      });
+    }
+    return looks;
+  }
+
+  async function generateOutfitImageBytes(outfit, records) {
     const key = setting("OPENAI_API_KEY");
     if (!key) throw new Error("OPENAI_API_KEY is not configured");
-    const modelPath = path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"));
-    let modelData;
-    try {
-      modelData = await readFile(modelPath);
-    } catch (error) {
-      if (error.code === "ENOENT") throw new Error(`Model reference not found at ${modelPath}. Set WARDROBE_MODEL_REFERENCE or add data/model-reference.png.`);
-      throw error;
+    const looks = await resolveOutfitLooks(outfit, records);
+    const images = [];
+    for (const [lookIndex, look] of looks.entries()) {
+      let modelData;
+      try {
+        modelData = await readFile(look.modelPath);
+      } catch (error) {
+        if (error.code === "ENOENT") throw new Error(`Model reference image is missing for ${look.model?.name || look.modelId || "model"}.`);
+        throw error;
+      }
+      images.push({ data: modelData, mime: "image/png", name: `model-${lookIndex + 1}.png` });
+      for (const [garmentIndex, garment] of look.garments.entries()) {
+        images.push({
+          data: await resolveGarmentAsset(garment),
+          mime: "image/png",
+          name: `look-${lookIndex + 1}-garment-${garmentIndex + 1}.png`,
+        });
+      }
     }
-    const ordered = sortGarmentsByPart(garments);
-    const images = [
-      { data: modelData, mime: "image/png", name: "model.png" },
-      ...await Promise.all(ordered.map(async (garment, index) => ({
-        data: await resolveGarmentAsset(garment),
-        mime: "image/png",
-        name: `garment-${index + 1}.png`,
-      }))),
-    ];
-    const prompt = options.outfitPrompt || buildOutfitPrompt(ordered, {
-      name: outfit.name,
-      setting: outfit.setting || DEFAULT_OUTFIT_SETTING,
-      prompt: outfitGenerationDirection(outfit),
-    });
+
+    const direction = outfitGenerationDirection(outfit);
+    let prompt;
+    if (looks.length >= 2) {
+      prompt = options.duoOutfitPrompt || buildDuoOutfitPrompt(looks.map((look) => ({
+        modelName: look.model?.name || "Model",
+        garments: look.garments,
+      })), {
+        name: outfit.name,
+        setting: outfit.setting || DEFAULT_OUTFIT_SETTING,
+        prompt: direction,
+      });
+    } else {
+      const ordered = looks[0].garments;
+      prompt = options.outfitPrompt || buildOutfitPrompt(ordered, {
+        name: outfit.name,
+        setting: outfit.setting || DEFAULT_OUTFIT_SETTING,
+        prompt: direction,
+      });
+    }
+
     return openAIEdit({
       key,
       baseUrl: apiBaseUrl(),
@@ -941,11 +1308,7 @@ export function wardrobeImportApi(options = {}) {
         const outfit = document.outfits.find((item) => item.id === id);
         if (!outfit) return;
         const records = await loadImported();
-        const garments = (outfit.garmentIds || [])
-          .map((garmentId) => records.find((item) => item.id === garmentId))
-          .filter(Boolean);
-        if (garments.length < 2) throw new Error("This outfit is missing garments from the wardrobe.");
-        const { bytes, cost } = await generateOutfitImageBytes(outfit, garments);
+        const { bytes, cost } = await generateOutfitImageBytes(outfit, records);
         await mkdir(outfitAssetDir, { recursive: true });
         const assetName = `${id}.png`;
         await writeFile(path.join(outfitAssetDir, assetName), bytes);
@@ -1014,12 +1377,21 @@ export function wardrobeImportApi(options = {}) {
             : `garment-${current.stages.garment.attempts}.png`;
           const garmentFile = path.join(dir, garmentName);
           const garment = { data: await readFile(garmentFile), mime: "image/png", name: "garment.png" };
-          const modelPath = path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"));
+          const selectedModelId = typeof current.stages.modeled?.modelId === "string" && current.stages.modeled.modelId.trim()
+            ? current.stages.modeled.modelId.trim()
+            : null;
+          const resolvedModel = selectedModelId
+            ? await resolveModelFile(selectedModelId)
+            : await resolveDefaultModelFile();
           let modelData;
           try {
-            modelData = await readFile(modelPath);
+            modelData = await readFile(resolvedModel.filePath);
           } catch (error) {
-            if (error.code === "ENOENT") throw new Error(`Model reference not found at ${modelPath}. Set WARDROBE_MODEL_REFERENCE or add data/model-reference.png.`);
+            if (error.code === "ENOENT") {
+              throw new Error(selectedModelId
+                ? "Selected model reference image is missing. Replace it in the Models tab."
+                : "Default model reference image is missing. Add or replace a model in the Models tab.");
+            }
             throw error;
           }
           const model = { data: modelData, mime: "image/png", name: "model.png" };
@@ -1064,6 +1436,94 @@ export function wardrobeImportApi(options = {}) {
       }
       if (url.pathname === "/api/import/config" && req.method === "GET") {
         return json(res, 200, await setupStatus());
+      }
+      if (url.pathname === "/api/import/models" && req.method === "GET") {
+        const document = await ensureModelsSeeded();
+        return json(res, 200, {
+          defaultModelId: document.defaultModelId,
+          models: [...document.models].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
+        });
+      }
+      if (url.pathname === "/api/import/models" && req.method === "POST") {
+        const input = await body(req);
+        const { data } = decodeImage(input);
+        const name = typeof input.name === "string" && input.name.trim()
+          ? input.name.trim().slice(0, 120)
+          : "New model";
+        const document = await ensureModelsSeeded();
+        const id = `model-${randomUUID()}`;
+        const now = new Date().toISOString();
+        const assets = await writeModelAssets(id, data);
+        const model = {
+          id,
+          name,
+          image: assets.image,
+          preview: assets.preview,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const next = {
+          ...document,
+          defaultModelId: document.defaultModelId || id,
+          models: [...document.models, model],
+        };
+        await saveModelsDocument(next);
+        return json(res, 201, { defaultModelId: next.defaultModelId, model });
+      }
+      const modelMatch = url.pathname.match(/^\/api\/import\/models\/(model-[a-f0-9-]{36})$/i);
+      if (modelMatch && req.method === "PATCH") {
+        const id = modelMatch[1];
+        const input = await body(req);
+        const document = await ensureModelsSeeded();
+        const index = document.models.findIndex((model) => model.id === id);
+        if (index === -1) return json(res, 404, { error: "Model not found" });
+        const current = document.models[index];
+        let name = current.name;
+        if (typeof input.name === "string") {
+          name = input.name.trim().slice(0, 120);
+          if (!name) return json(res, 400, { error: "Model name cannot be empty." });
+        }
+        const now = new Date().toISOString();
+        let image = current.image;
+        let preview = current.preview || null;
+        if (input.imageDataUrl || input.imageBase64) {
+          const { data } = decodeImage(input);
+          const assets = await writeModelAssets(id, data);
+          image = assets.image;
+          preview = assets.preview;
+        }
+        const updated = { ...current, name, image, preview, updatedAt: now };
+        const models = [...document.models];
+        models[index] = updated;
+        let defaultModelId = document.defaultModelId;
+        if (input.setDefault === true) defaultModelId = id;
+        await saveModelsDocument({ ...document, defaultModelId, models });
+        return json(res, 200, { defaultModelId, model: updated });
+      }
+      if (modelMatch && req.method === "DELETE") {
+        const id = modelMatch[1];
+        const document = await ensureModelsSeeded();
+        if (document.models.length <= 1) {
+          return json(res, 400, { error: "Keep at least one model in the library." });
+        }
+        const nextModels = document.models.filter((model) => model.id !== id);
+        if (nextModels.length === document.models.length) return json(res, 404, { error: "Model not found" });
+        let defaultModelId = document.defaultModelId;
+        if (defaultModelId === id) defaultModelId = nextModels[0].id;
+        await saveModelsDocument({ ...document, defaultModelId, models: nextModels });
+        await Promise.all([
+          rm(modelImagePath(id), { force: true }),
+          rm(modelPreviewPath(id), { force: true }),
+        ]);
+        return json(res, 200, { deleted: true, id, defaultModelId });
+      }
+      const modelAssetMatch = url.pathname.match(/^\/api\/import\/model-images\/([\w.-]+)$/i);
+      if (modelAssetMatch && req.method === "GET") {
+        const file = path.join(modelAssetDir, path.basename(modelAssetMatch[1]));
+        await stat(file);
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return res.end(await readFile(file));
       }
       if (url.pathname === "/api/import/outfits" && req.method === "GET") {
         const document = await loadOutfitsDocument();
@@ -1162,48 +1622,94 @@ export function wardrobeImportApi(options = {}) {
         if (!setup.ready) {
           const missing = [
             !setup.hasApiKey && "OPENAI_API_KEY in .env",
-            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+            !setup.hasModelReference && "a default model in the Models tab",
           ].filter(Boolean).join(" and ");
           return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
         }
         const input = await body(req);
-        const garmentIds = Array.isArray(input.garmentIds)
-          ? [...new Set(input.garmentIds.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))]
-          : [];
-        if (garmentIds.length < 2) {
-          return json(res, 400, { error: "Add at least two garments to generate an outfit." });
+        const modelsDocument = await ensureModelsSeeded();
+        const defaultModelId = modelsDocument.defaultModelId;
+        const looksInput = Array.isArray(input.looks) && input.looks.length
+          ? input.looks
+          : [{
+              modelId: typeof input.modelId === "string" ? input.modelId : defaultModelId,
+              garmentIds: Array.isArray(input.garmentIds) ? input.garmentIds : [],
+            }];
+        if (looksInput.length < 1 || looksInput.length > 2) {
+          return json(res, 400, { error: "Choose one or two models for an outfit." });
         }
+
         const records = await loadImported();
-        const garments = [];
-        const seenParts = new Set();
-        for (const garmentId of garmentIds) {
-          const record = records.find((item) => item.id === garmentId);
-          if (!record) return json(res, 404, { error: `Wardrobe item not found: ${garmentId}` });
-          if (record.part !== "accessories_up") {
-            if (seenParts.has(record.part)) {
-              return json(res, 400, { error: `Only one ${PART_LABEL[record.part] || "item"} can be added.` });
-            }
-            seenParts.add(record.part);
+        const looks = [];
+        const modelIds = [];
+        for (const lookInput of looksInput) {
+          const modelId = typeof lookInput.modelId === "string" && lookInput.modelId.trim()
+            ? lookInput.modelId.trim()
+            : defaultModelId;
+          if (!modelId) return json(res, 400, { error: "Add a default model before generating outfits." });
+          if (modelIds.includes(modelId)) {
+            return json(res, 400, { error: "Choose two different models for a duo outfit." });
           }
-          garments.push(record);
-        }
-        for (const garment of garments) {
+          const model = modelsDocument.models.find((entry) => entry.id === modelId);
+          if (!model) return json(res, 404, { error: `Model not found: ${modelId}` });
           try {
-            await resolveGarmentAsset(garment);
+            await resolveModelFile(modelId);
           } catch (error) {
             return json(res, error.status || 409, { error: error.message });
           }
+
+          const garmentIds = Array.isArray(lookInput.garmentIds)
+            ? [...new Set(lookInput.garmentIds.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))]
+            : [];
+          if (garmentIds.length < 2) {
+            return json(res, 400, { error: looksInput.length > 1
+              ? `Add at least two garments for ${model.name || "each model"}.`
+              : "Add at least two garments to generate an outfit." });
+          }
+          const garments = [];
+          const seenParts = new Set();
+          for (const garmentId of garmentIds) {
+            const record = records.find((item) => item.id === garmentId);
+            if (!record) return json(res, 404, { error: `Wardrobe item not found: ${garmentId}` });
+            if (record.part !== "accessories_up") {
+              if (seenParts.has(record.part)) {
+                return json(res, 400, { error: `Only one ${PART_LABEL[record.part] || "item"} can be added.` });
+              }
+              seenParts.add(record.part);
+            }
+            garments.push(record);
+          }
+          for (const garment of garments) {
+            try {
+              await resolveGarmentAsset(garment);
+            } catch (error) {
+              return json(res, error.status || 409, { error: error.message });
+            }
+          }
+          const ordered = sortGarmentsByPart(garments);
+          modelIds.push(modelId);
+          looks.push({
+            modelId,
+            garmentIds: ordered.map((item) => item.id),
+            garments: ordered,
+            modelName: model.name,
+          });
         }
-        const ordered = sortGarmentsByPart(garments);
+
+        const flatGarments = looks.flatMap((look) => look.garments);
         const id = `outfit-${randomUUID()}`;
-        const name = outfitNameFromGarments(ordered);
+        const name = looks.length > 1
+          ? looks.map((look) => `${look.modelName}: ${outfitNameFromGarments(look.garments)}`).join(" · ")
+          : outfitNameFromGarments(looks[0].garments);
         const createdAt = new Date().toISOString();
         const tags = input.tags !== undefined ? normalizeTags(input.tags) : [];
         const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) || null : null;
         const outfit = {
           id,
-          name,
-          garmentIds: ordered.map((item) => item.id),
+          name: name.slice(0, 160),
+          modelIds,
+          looks: looks.map((look) => ({ modelId: look.modelId, garmentIds: look.garmentIds })),
+          garmentIds: [...new Set(flatGarments.map((item) => item.id))],
           setting: DEFAULT_OUTFIT_SETTING,
           tags,
           prompt,
@@ -1285,7 +1791,7 @@ export function wardrobeImportApi(options = {}) {
         if (!setup.ready) {
           const missing = [
             !setup.hasApiKey && "OPENAI_API_KEY in .env",
-            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+            !setup.hasModelReference && "a default model in the Models tab",
           ].filter(Boolean).join(" and ");
           return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
         }
@@ -1309,7 +1815,7 @@ export function wardrobeImportApi(options = {}) {
         if (!setup.ready) {
           const missing = [
             !setup.hasApiKey && "OPENAI_API_KEY in .env",
-            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+            !setup.hasModelReference && "a default model in the Models tab",
           ].filter(Boolean).join(" and ");
           return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
         }
@@ -1319,11 +1825,26 @@ export function wardrobeImportApi(options = {}) {
         if (record.modeledGeneration?.status === "processing") return json(res, 202, record);
         const input = await body(req);
         const direction = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) : "";
+        const modelsDocument = await ensureModelsSeeded();
+        const requestedModelId = typeof input.modelId === "string" && input.modelId.trim()
+          ? input.modelId.trim()
+          : modelsDocument.defaultModelId;
+        if (!requestedModelId) {
+          return json(res, 400, { error: "Add a model before generating a modeled photo." });
+        }
+        if (!modelsDocument.models.some((model) => model.id === requestedModelId)) {
+          return json(res, 404, { error: `Model not found: ${requestedModelId}` });
+        }
+        try {
+          await resolveModelFile(requestedModelId);
+        } catch (error) {
+          return json(res, error.status || 409, { error: error.message });
+        }
         const marked = await updateWardrobeRecord(id, (current) => ({
           ...current,
           modeledGeneration: { status: "processing", error: null, startedAt: new Date().toISOString() },
         }));
-        void generateModeledForWardrobeItem(id, direction);
+        void generateModeledForWardrobeItem(id, direction, requestedModelId);
         return json(res, 202, marked);
       }
       const libraryAssetMatch = url.pathname.match(/^\/api\/import\/library\/([\w.-]+)$/i);
@@ -1347,7 +1868,7 @@ export function wardrobeImportApi(options = {}) {
         if (!setup.ready) {
           const missing = [
             !setup.hasApiKey && "OPENAI_API_KEY in .env",
-            !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
+            !setup.hasModelReference && "a default model in the Models tab",
           ].filter(Boolean).join(" and ");
           return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
         }
@@ -1434,6 +1955,18 @@ export function wardrobeImportApi(options = {}) {
           if (stageName === "crop") throw Object.assign(new Error("Upload the image again to create new crops"), { status: 400 });
           const input = await body(req);
           job.stages[stageName].prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1200) || null : null;
+          if (stageName === "modeled") {
+            const modelsDocument = await ensureModelsSeeded();
+            const requestedModelId = typeof input.modelId === "string" && input.modelId.trim()
+              ? input.modelId.trim()
+              : (job.stages.modeled.modelId || modelsDocument.defaultModelId);
+            if (!requestedModelId) throw Object.assign(new Error("Add a model before generating a modeled photo."), { status: 400 });
+            if (!modelsDocument.models.some((model) => model.id === requestedModelId)) {
+              throw Object.assign(new Error(`Model not found: ${requestedModelId}`), { status: 404 });
+            }
+            await resolveModelFile(requestedModelId);
+            job.stages.modeled.modelId = requestedModelId;
+          }
           job.stages[stageName].status = "queued";
           job.stages[stageName].decision = null;
           await saveJob(job);
@@ -1444,6 +1977,19 @@ export function wardrobeImportApi(options = {}) {
         const previousStatus = job.stages[stageName].status;
         const previousDecision = job.stages[stageName].decision;
         const previousJobStatus = job.status;
+        if (stageName === "garment" && decision === "approve") {
+          const input = await body(req).catch(() => ({}));
+          const modelsDocument = await ensureModelsSeeded();
+          const requestedModelId = typeof input.modelId === "string" && input.modelId.trim()
+            ? input.modelId.trim()
+            : (job.stages.modeled.modelId || modelsDocument.defaultModelId);
+          if (!requestedModelId) throw Object.assign(new Error("Choose a model before approving the garment."), { status: 400 });
+          if (!modelsDocument.models.some((model) => model.id === requestedModelId)) {
+            throw Object.assign(new Error(`Model not found: ${requestedModelId}`), { status: 404 });
+          }
+          await resolveModelFile(requestedModelId);
+          job.stages.modeled.modelId = requestedModelId;
+        }
         job.stages[stageName].decision = decision === "approve" ? "approved" : "rejected";
         job.stages[stageName].status = job.stages[stageName].decision;
         job.stages[stageName].error = null;
@@ -1488,10 +2034,14 @@ export function wardrobeImportApi(options = {}) {
       libraryAssetDir = path.join(dataDir, "imported");
       outfitsFile = path.join(dataDir, "outfits.json");
       outfitAssetDir = path.join(dataDir, "outfit-images");
+      modelsFile = path.join(dataDir, "models.json");
+      modelAssetDir = path.join(dataDir, "model-images");
       errorsFile = path.join(dataDir, "errors.json");
       await mkdir(jobsDir, { recursive: true });
       await mkdir(libraryAssetDir, { recursive: true });
       await mkdir(outfitAssetDir, { recursive: true });
+      await mkdir(modelAssetDir, { recursive: true });
+      await ensureModelsSeeded();
       const importedRecords = await loadImported();
       let importedInterrupted = false;
       const sweptRecords = importedRecords.map((record) => {

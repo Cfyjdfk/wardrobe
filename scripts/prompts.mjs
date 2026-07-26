@@ -126,6 +126,97 @@ Avoid: Completely hidden selected garments, invented zippers, buttons, openings 
   return direction ? `${base}\n\nUser direction: ${direction}` : base;
 }
 
+/**
+ * Duo outfit prompt: two identity references, each with their own garment set, one shared frame.
+ * looks: [{ modelName, garments }] — garments already sorted by part.
+ * Image order expected by the caller: modelA, garmentsA..., modelB, garmentsB...
+ */
+export function buildDuoOutfitPrompt(looks = [], options = {}) {
+  const people = looks.slice(0, 2).map((look) => ({
+    modelName: look.modelName || "Model",
+    garments: sortGarmentsByPart(look.garments || []),
+  }));
+  if (people.length < 2) {
+    return buildOutfitPrompt(people[0]?.garments || [], options);
+  }
+
+  const setting = options.setting || DEFAULT_OUTFIT_SETTING;
+  const name = options.name
+    || people.map((person) => `${person.modelName}: ${outfitNameFromGarments(person.garments)}`).join(" · ");
+
+  const imageLines = [];
+  let imageIndex = 1;
+  const personSummaries = [];
+  for (const [personIndex, person] of people.entries()) {
+    const identityIndex = imageIndex;
+    imageLines.push(`Image ${identityIndex}: identity reference for person ${personIndex + 1} (${person.modelName}). Preserve this exact person.`);
+    imageIndex += 1;
+    const garmentIndexes = [];
+    for (const item of person.garments) {
+      const role = PART_ROLE[item.part] || "garment";
+      const label = item.name || PART_LABEL[item.part] || "garment";
+      const outerNote = item.part === "wholebody_up"
+        ? " Preserve its real construction and closure exactly; never invent a zipper, buttons, placket, or opening."
+        : "";
+      imageLines.push(`Image ${imageIndex}: exact ${role} reference (${label}) for person ${personIndex + 1} only.${outerNote}`);
+      garmentIndexes.push(imageIndex);
+      imageIndex += 1;
+    }
+    const garmentList = person.garments
+      .map((item) => `${PART_ROLE[item.part] || "garment"} (${item.name || PART_LABEL[item.part] || "piece"})`)
+      .join(", ");
+    const hasShoes = person.garments.some((item) => item.part === "shoes");
+    const shoesClause = hasShoes
+      ? ""
+      : " Plain understated shoes and invisible basics such as socks are allowed only where needed when no shoe reference is provided.";
+    personSummaries.push({
+      identityIndex,
+      garmentIndexes,
+      modelName: person.modelName,
+      garmentList,
+      shoesClause,
+      hasLayeredLook: person.garments.some((item) => item.part === "upperbody")
+        && person.garments.some((item) => item.part === "wholebody_up"),
+    });
+  }
+
+  const layeredClause = personSummaries.some((person) => person.hasLayeredLook)
+    ? "\n\nLayered-look clause: For any person with both an inner top and outer layer, layer them naturally so both remain visibly identifiable. Never invent, add, split, unzip, unbutton, or simulate a closure that is not in the outer reference."
+    : "";
+
+  const subjectLines = personSummaries.map((person) => (
+    `Person ${person.identityIndex === personSummaries[0].identityIndex ? "1" : "2"} (${person.modelName}, Image ${person.identityIndex}): Preserve their recognizable face, hair, age, build, skin texture, and body proportions. Dress them only in their referenced garments: ${person.garmentList}.${person.shoesClause}`
+  )).join("\n");
+
+  const base = `Use case: identity-preserve-duo
+Asset type: square duo outfit gallery photograph
+
+${imageLines.join("\n")}
+
+Primary request: Create one professional square editorial fashion photograph showing BOTH people together in the same real-world scene. Each person wears only their own referenced garments.
+
+Outfit: ${name}
+Scene/backdrop: ${setting}.
+
+Subjects:
+${subjectLines}
+
+Do not swap garments between people. Do not add, replace, or invent any other visible clothing or accessory. Every selected garment on each person must remain clearly visible and identifiable.
+
+Style/medium: Photorealistic natural editorial fashion campaign with authentic skin and fabric texture and no synthetic AI polish.
+
+Composition/framing: Square 1:1 image. Show both complete people and outfits from head through shoes. Keep both people clearly readable, standing or posing naturally together with modest breathing room. Prefer a mostly front-facing duo composition with arms away from torsos so garments remain readable.
+
+Lighting/mood: Warm professional natural light, realistic shadows, and restrained editorial color grading.
+
+Garment fidelity: Preserve every referenced garment precisely: color, material, fit, construction, pattern, graphics, logos, text, proportions, distinctive details, and real closure construction.${layeredClause}
+
+Avoid: Swapped outfits, missing person, third people, completely hidden selected garments, invented closures, unnatural layering, extra layers, hats, bags, scarves, jewelry, crossed arms blocking clothing, garment redesign, cropped feet, text overlays, watermarks, studio cutout appearance, or synthetic AI polish.`;
+
+  const direction = typeof options.prompt === "string" ? options.prompt.trim() : "";
+  return direction ? `${base}\n\nUser direction: ${direction}` : base;
+}
+
 function catalogTags(item) {
   return Array.isArray(item.tags)
     ? item.tags.filter((tag) => typeof tag === "string" && tag.trim()).map((tag) => tag.trim().toLowerCase())

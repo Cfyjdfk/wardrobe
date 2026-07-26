@@ -643,99 +643,228 @@ function GalleryOutfitPrompt({ onSubmit, loading = false, disabled = false, cost
   );
 }
 
-function OutfitComposer({ items, prompt, onPromptChange, error, onAdd, onRemove, onGenerate, onOpen, suggesting = false }) {
-  const [draggingOver, setDraggingOver] = useState(false);
+function ComposerLookTray({
+  lookIndex,
+  label,
+  items,
+  draggingOver,
+  suggesting,
+  onAdd,
+  onRemove,
+  onOpen,
+  onDragState,
+}) {
   const ordered = sortByPart(items);
-  const canGenerate = ordered.length >= 2 && !suggesting;
 
   const acceptDrop = (event) => {
     if (suggesting) return;
     event.preventDefault();
     event.stopPropagation();
-    setDraggingOver(false);
+    onDragState(null);
     const id = event.dataTransfer.getData(GARMENT_DRAG_MIME) || event.dataTransfer.getData("text/plain");
-    if (id) onAdd(id);
+    if (id) onAdd(lookIndex, id);
+  };
+
+  return (
+    <div
+      className={`outfit-composer-look${draggingOver ? " is-over" : ""}`}
+      aria-label={label}
+      onDragEnter={(event) => {
+        if (suggesting) return;
+        if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
+        event.preventDefault();
+        onDragState(lookIndex);
+      }}
+      onDragOver={(event) => {
+        if (suggesting) return;
+        if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        onDragState(lookIndex);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        onDragState((current) => (current === lookIndex ? null : current));
+      }}
+      onDrop={acceptDrop}
+    >
+      {label && <p className="outfit-composer-look-label">{label}</p>}
+      <div className="outfit-composer-tray">
+        {!ordered.length ? (
+          <p className="outfit-composer-empty">Drag garments here</p>
+        ) : (
+          <div className="outfit-composer-items" role="list">
+            {ordered.map((item, index) => (
+              <div className="outfit-composer-slot" key={item.id} role="listitem">
+                {index > 0 && (
+                  <span className="outfit-composer-plus" aria-hidden="true">
+                    <Plus size={14} weight="bold" />
+                  </span>
+                )}
+                <div className="outfit-composer-chip">
+                  <button
+                    type="button"
+                    className="outfit-composer-chip-open"
+                    disabled={suggesting || !onOpen}
+                    onClick={() => onOpen?.(item.id)}
+                    aria-label={`View ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
+                  >
+                    <OptimizedImage
+                      src={item.thumbnail || item.image}
+                      alt=""
+                      sizes="128px"
+                      breakpoints={[96, 128, 160, 256]}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    className="outfit-composer-remove"
+                    disabled={suggesting}
+                    onClick={() => onRemove(lookIndex, item.id)}
+                    aria-label={`Remove ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
+                  >
+                    <X size={12} weight="bold" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OutfitComposer({
+  models,
+  looks,
+  onModelChange,
+  onAddSecondModel,
+  onRemoveSecondModel,
+  prompt,
+  onPromptChange,
+  error,
+  onAdd,
+  onRemove,
+  onGenerate,
+  onOpen,
+  suggesting = false,
+}) {
+  const [draggingOverLook, setDraggingOverLook] = useState(null);
+  const isDuo = looks.length > 1;
+  const orderedLooks = looks.map((look) => ({
+    ...look,
+    ordered: sortByPart(look.items || []),
+    model: models.find((model) => model.id === look.modelId) || null,
+  }));
+  const canGenerate = !suggesting && orderedLooks.every((look) => look.ordered.length >= 2);
+  const hasAnyItems = orderedLooks.some((look) => look.ordered.length > 0);
+  const modelOptionsFor = (lookIndex) => {
+    const otherIds = new Set(
+      looks.map((look, index) => (index === lookIndex ? null : look.modelId)).filter(Boolean),
+    );
+    return models.filter((model) => !otherIds.has(model.id));
   };
 
   return (
     <div className="outfit-composer-shell">
       <section
-        className={`outfit-composer${draggingOver ? " is-over" : ""}${ordered.length || suggesting ? " has-items" : ""}${suggesting ? " is-suggesting" : ""}`}
+        className={`outfit-composer${hasAnyItems || suggesting ? " has-items" : ""}${suggesting ? " is-suggesting" : ""}${isDuo ? " is-duo" : ""}`}
         aria-label="Outfit composer"
         aria-busy={suggesting || undefined}
-        onDragEnter={(event) => {
-          if (suggesting) return;
-          if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
-          event.preventDefault();
-          setDraggingOver(true);
-        }}
-        onDragOver={(event) => {
-          if (suggesting) return;
-          if (![...event.dataTransfer.types].includes(GARMENT_DRAG_MIME) && ![...event.dataTransfer.types].includes("text/plain")) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-          setDraggingOver(true);
-        }}
-        onDragLeave={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget)) return;
-          setDraggingOver(false);
-        }}
-        onDrop={acceptDrop}
       >
         {suggesting && (
           <div className="outfit-composer-suggesting" role="status" aria-label="Suggesting outfit">
             <span className="outfit-composer-rainbow" aria-hidden="true" />
           </div>
         )}
-        <div className="outfit-composer-main">
-          <div className="outfit-composer-tray">
-            {!ordered.length ? (
-              <p className="outfit-composer-empty">Drag garments here to build an outfit</p>
-            ) : (
-              <div className="outfit-composer-items" role="list">
-                {ordered.map((item, index) => (
-                  <div className="outfit-composer-slot" key={item.id} role="listitem">
-                    {index > 0 && (
-                      <span className="outfit-composer-plus" aria-hidden="true">
-                        <Plus size={14} weight="bold" />
-                      </span>
-                    )}
-                    <div className="outfit-composer-chip">
+
+        <div className={`outfit-composer-models${isDuo ? " is-duo" : ""}`} aria-label="Models">
+          {looks.map((look, lookIndex) => {
+            const selectedModel = models.find((model) => model.id === look.modelId) || null;
+            const previewSrc = selectedModel?.preview || selectedModel?.image || "";
+            return (
+              <div key={`model-select-${lookIndex}`} className="outfit-composer-model-field">
+                <label className="outfit-composer-model-label" htmlFor={`composer-model-${lookIndex}`}>
+                  {isDuo ? `Model ${lookIndex + 1}` : "Model"}
+                </label>
+                <div className="outfit-composer-model-row">
+                  {previewSrc ? (
+                    <span className="outfit-composer-model-avatar" aria-hidden="true">
+                      <OptimizedImage
+                        src={previewSrc}
+                        alt=""
+                        sizes="36px"
+                        breakpoints={[36, 48, 72]}
+                      />
+                    </span>
+                  ) : (
+                    <span className="outfit-composer-model-avatar is-empty" aria-hidden="true" />
+                  )}
+                  <div className="outfit-composer-model-control">
+                    <select
+                      id={`composer-model-${lookIndex}`}
+                      value={look.modelId || ""}
+                      disabled={suggesting || !models.length}
+                      onChange={(event) => onModelChange(lookIndex, event.target.value)}
+                    >
+                      {!look.modelId && <option value="">Select model</option>}
+                      {modelOptionsFor(lookIndex).map((model) => (
+                        <option key={model.id} value={model.id}>{model.name || "Untitled model"}</option>
+                      ))}
+                    </select>
+                    {lookIndex > 0 && (
                       <button
                         type="button"
-                        className="outfit-composer-chip-open"
-                        disabled={suggesting || !onOpen}
-                        onClick={() => onOpen?.(item.id)}
-                        aria-label={`View ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
-                      >
-                        <OptimizedImage
-                          src={item.thumbnail || item.image}
-                          alt=""
-                          sizes="128px"
-                          breakpoints={[96, 128, 160, 256]}
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        className="outfit-composer-remove"
+                        className="outfit-composer-model-remove"
                         disabled={suggesting}
-                        onClick={() => onRemove(item.id)}
-                        aria-label={`Remove ${item.name || TYPE_MAP[item.part]?.singular || "garment"}`}
+                        onClick={onRemoveSecondModel}
+                        aria-label={`Remove model ${lookIndex + 1}`}
                       >
-                        <X size={12} weight="bold" aria-hidden="true" />
+                        <X size={11} weight="bold" aria-hidden="true" />
                       </button>
-                    </div>
+                    )}
                   </div>
-                ))}
+                  {!isDuo && lookIndex === 0 && models.length > 1 && (
+                    <button
+                      type="button"
+                      className="outfit-composer-add-model"
+                      disabled={suggesting || !models.some((model) => model.id !== looks[0]?.modelId)}
+                      onClick={onAddSecondModel}
+                    >
+                      <Plus size={14} weight="bold" aria-hidden="true" />
+                      Add model
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })}
         </div>
 
-        {ordered.length > 0 && !suggesting && (
+        <div className={`outfit-composer-main${isDuo ? " is-duo" : ""}`}>
+          {orderedLooks.map((look, lookIndex) => (
+            <ComposerLookTray
+              key={`look-${lookIndex}-${look.modelId || "none"}`}
+              lookIndex={lookIndex}
+              label={isDuo ? (look.model?.name || `Model ${lookIndex + 1}`) : ""}
+              items={look.items || []}
+              draggingOver={draggingOverLook === lookIndex}
+              suggesting={suggesting}
+              onAdd={onAdd}
+              onRemove={onRemove}
+              onOpen={onOpen}
+              onDragState={setDraggingOverLook}
+            />
+          ))}
+        </div>
+
+        {hasAnyItems && !suggesting && (
           <div className="outfit-composer-actions">
-            {ordered.length < 2 ? (
-              <p className="outfit-composer-hint">Add at least one more garment</p>
+            {!canGenerate ? (
+              <p className="outfit-composer-hint">
+                {isDuo ? "Add at least two garments for each model" : "Add at least one more garment"}
+              </p>
             ) : (
               <>
                 <label className="outfit-composer-prompt">
@@ -916,7 +1045,366 @@ const OutfitsPanel = memo(function OutfitsPanel({
   );
 });
 
-function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext, gridColumns = 1 }) {
+const ModelsSection = memo(function ModelsSection({ models, selectedId, defaultModelId, onOpen, gridRef }) {
+  if (!models.length) return null;
+  return (
+    <section className="outfits-section models-section" aria-label="Models">
+      <div className="models-grid" ref={gridRef}>
+        {models.map((model) => {
+          const isDefault = model.id === defaultModelId;
+          const previewSrc = model.preview || model.image;
+          return (
+            <button
+              key={model.id}
+              type="button"
+              className={`model-avatar-card${selectedId === model.id ? " selected" : ""}${isDefault ? " is-default" : ""}`}
+              data-testid={`model-${model.id}`}
+              onClick={() => onOpen(model.id)}
+              aria-label={`View ${model.name || "model"}${isDefault ? ", default" : ""}`}
+              aria-pressed={selectedId === model.id}
+            >
+              <div className="model-avatar">
+                {previewSrc ? (
+                  <OptimizedImage
+                    src={previewSrc}
+                    alt=""
+                    draggable={false}
+                    sizes="160px"
+                    breakpoints={[96, 128, 160, 240, 320]}
+                  />
+                ) : (
+                  <span className="model-avatar-placeholder" aria-hidden="true" />
+                )}
+                {isDefault && <span className="model-default-badge">Default</span>}
+              </div>
+              {model.name && <p className="model-avatar-name">{model.name}</p>}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+});
+
+const ModelsPanel = memo(function ModelsPanel({
+  models,
+  selectedId,
+  defaultModelId,
+  searching,
+  onOpen,
+  onAdd,
+  addBusy,
+  gridRef,
+}) {
+  const fileInputRef = useRef(null);
+  return (
+    <>
+      <div className="models-toolbar">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) onAdd(file);
+          }}
+        />
+        <button
+          type="button"
+          className="models-add-button"
+          disabled={addBusy}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Plus size={15} weight="bold" aria-hidden="true" />
+          {addBusy ? "Adding…" : "Add model"}
+        </button>
+      </div>
+      {!models.length && (
+        <p className="status">
+          {searching ? "No models match this search." : "Add a reference photo to create your first model."}
+        </p>
+      )}
+      {!!models.length && (
+        <ModelsSection
+          models={models}
+          selectedId={selectedId}
+          defaultModelId={defaultModelId}
+          onOpen={onOpen}
+          gridRef={gridRef}
+        />
+      )}
+    </>
+  );
+});
+
+function ModelViewer({
+  model,
+  isDefault,
+  canDelete,
+  onClose,
+  onSave,
+  onSetDefault,
+  onDelete,
+  onNavigate,
+  canPrev,
+  canNext,
+  gridColumns = 1,
+}) {
+  const { showApiError } = useApiError();
+  const closeButtonRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  const mountedRef = useRef(true);
+  const [name, setName] = useState(model.name || "");
+  const [saving, setSaving] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [settingDefault, setSettingDefault] = useState(false);
+  const [zoomImage, setZoomImage] = useState(null);
+  const isDirty = name.trim() !== (model.name || "").trim();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setName(model.name || "");
+  }, [model.id, model.name]);
+
+  const persistModel = useCallback(async () => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setName(model.name || "");
+      showApiError("Model name cannot be empty.", { title: "Could not save model" });
+      return false;
+    }
+    if (nextName === (model.name || "").trim()) return true;
+    setSaving(true);
+    try {
+      await onSave(model.id, { name: nextName });
+      if (!mountedRef.current) return false;
+      setName(nextName);
+      return true;
+    } catch (error) {
+      if (!mountedRef.current) return false;
+      showApiError(error, { title: "Could not save model", fallback: "Could not save the model." });
+      return false;
+    } finally {
+      if (mountedRef.current) setSaving(false);
+    }
+  }, [model.id, model.name, name, onSave, showApiError]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const timer = setTimeout(() => {
+      void persistModel();
+    }, AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [isDirty, name, persistModel]);
+
+  const flushAndRun = useCallback(async (action) => {
+    if (isDirty) await persistModel();
+    action?.();
+  }, [isDirty, persistModel]);
+
+  const requestClose = useCallback(() => {
+    void flushAndRun(onClose);
+  }, [flushAndRun, onClose]);
+
+  const requestNavigate = useCallback((delta) => {
+    if (!onNavigate || !delta) return;
+    if ((delta < 0 && !canPrev) || (delta > 0 && !canNext)) {
+      if (Math.abs(delta) === 1) return;
+    }
+    void flushAndRun(() => onNavigate(delta));
+  }, [canNext, canPrev, flushAndRun, onNavigate]);
+
+  useEffect(() => {
+    const unlock = lockBodyScroll();
+    closeButtonRef.current?.focus({ preventScroll: true });
+    return unlock;
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (zoomImage) return;
+      if (event.key === "Escape") {
+        if (isTypingTarget(event.target)) {
+          event.target.blur();
+          return;
+        }
+        requestClose();
+        return;
+      }
+      if (isTypingTarget(event.target)) return;
+      const delta = arrowNavigationDelta(event.key, gridColumns);
+      if (!delta) return;
+      event.preventDefault();
+      requestNavigate(delta);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [gridColumns, requestClose, requestNavigate, zoomImage]);
+
+  const replaceImage = async (file) => {
+    if (!file) return;
+    setReplacing(true);
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      await onSave(model.id, { imageDataUrl });
+    } catch (error) {
+      showApiError(error, { title: "Could not replace image", fallback: "Could not replace the model image." });
+    } finally {
+      if (mountedRef.current) setReplacing(false);
+    }
+  };
+
+  const handleSetDefault = async () => {
+    if (isDefault || settingDefault) return;
+    setSettingDefault(true);
+    try {
+      await onSetDefault(model.id);
+    } catch (error) {
+      showApiError(error, { title: "Could not set default", fallback: "Could not set the default model." });
+    } finally {
+      if (mountedRef.current) setSettingDefault(false);
+    }
+  };
+
+  return (
+    <div className="viewer-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && requestClose()}>
+      <div className="viewer-entry">
+        <aside
+          className={`viewer editing${(model.preview || model.image) ? " has-modeled-image has-outfit-image" : ""}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Selected model"
+        >
+          <button className="viewer-icon-close" type="button" onClick={requestClose} aria-label="Close viewer" ref={closeButtonRef}>
+            <X size={24} weight="light" aria-hidden="true" />
+          </button>
+          <ViewerNavArrows onNavigate={requestNavigate} label="model" canPrev={canPrev} canNext={canNext} />
+
+          {(model.preview || model.image) ? (
+            <button
+              className="modeled-hero outfit-hero model-viewer-hero image-zoom-trigger"
+              type="button"
+              onClick={() => setZoomImage({ kind: "model", src: model.preview || model.image, alt: name.trim() || model.name || "Model" })}
+              aria-label="View larger model photo"
+            >
+              <OptimizedImage
+                className="modeled-hero-photo model-viewer-hero-photo"
+                src={model.preview || model.image}
+                alt={name.trim() || model.name || "Model"}
+                draggable={false}
+                sizes="(max-width: 860px) 60vw, 280px"
+                breakpoints={[160, 240, 320, 480, 640]}
+                quality={82}
+                priority
+              />
+            </button>
+          ) : (
+            <div className="viewer-heading">
+              <div className="viewer-heading-title">
+                <h2>{name.trim() || "Model"}</h2>
+              </div>
+            </div>
+          )}
+
+          <div className="viewer-details editing">
+            {(model.preview || model.image) && (
+              <div className="viewer-heading modeled-heading">
+                <div className="viewer-heading-title">
+                  <h2>{name.trim() || "Model"}</h2>
+                  {isDefault && <span className="model-default-pill">Default</span>}
+                </div>
+              </div>
+            )}
+
+            <label className="field outfit-name-field">
+              <span>Name</span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Model"
+                maxLength={120}
+              />
+            </label>
+
+            <div className="model-viewer-actions-row">
+              <input
+                ref={replaceInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void replaceImage(file);
+                }}
+              />
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={replacing}
+                onClick={() => replaceInputRef.current?.click()}
+              >
+                <ArrowClockwise size={15} weight="regular" aria-hidden="true" />
+                {replacing ? "Replacing…" : "Replace image"}
+              </button>
+              {!isDefault && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={settingDefault}
+                  onClick={() => void handleSetDefault()}
+                >
+                  <Sparkle size={15} weight="regular" aria-hidden="true" />
+                  {settingDefault ? "Setting…" : "Set as default"}
+                </button>
+              )}
+            </div>
+
+            {saving && <p className="autosave-notice" role="status">Saving…</p>}
+
+            <div className="viewer-actions">
+              <button
+                className="delete-button"
+                type="button"
+                disabled={!canDelete}
+                title={!canDelete ? "Keep at least one model" : undefined}
+                onClick={() => onDelete(model.id)}
+              >
+                <Trash size={15} weight="regular" aria-hidden="true" /> Delete
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+      {zoomImage && (
+        <ImageZoomLightbox
+          src={zoomImage.src}
+          alt={zoomImage.alt}
+          onClose={() => setZoomImage(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read the image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function OutfitViewer({ outfit, garments, models = [], onClose, onDelete, onSave, onOpenGarment, onNavigate, canPrev, canNext, gridColumns = 1 }) {
   const { showApiError } = useApiError();
   const closeButtonRef = useRef(null);
   const mountedRef = useRef(true);
@@ -926,7 +1414,30 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
   const [saveError, setSaveError] = useState("");
   const [zoomImage, setZoomImage] = useState(null);
   const hasImage = outfit.status === "ready" && Boolean(outfit.image);
-  const orderedGarments = sortByPart(garments);
+  const garmentsById = useMemo(() => new Map(garments.map((item) => [item.id, item])), [garments]);
+  const modelsById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
+  const garmentLooks = useMemo(() => {
+    const looks = Array.isArray(outfit.looks) ? outfit.looks.filter((look) => look && Array.isArray(look.garmentIds)) : [];
+    if (looks.length > 1) {
+      return looks.map((look, index) => {
+        const model = look.modelId ? modelsById.get(look.modelId) : null;
+        const lookGarments = sortByPart(
+          look.garmentIds.map((id) => garmentsById.get(id)).filter(Boolean),
+        );
+        return {
+          key: look.modelId || `look-${index}`,
+          label: model?.name || `Model ${index + 1}`,
+          garments: lookGarments,
+        };
+      });
+    }
+    return [{
+      key: "all",
+      label: null,
+      garments: sortByPart(garments),
+    }];
+  }, [garments, garmentsById, modelsById, outfit.looks]);
+  const hasAnyGarments = garmentLooks.some((look) => look.garments.length > 0);
   const savedTags = outfitDetailTags(outfit);
   const isDirty = name.trim() !== (outfit.name || "").trim()
     || JSON.stringify(normalizeDetailTags(tags)) !== JSON.stringify(normalizeDetailTags(savedTags));
@@ -1091,37 +1602,48 @@ function OutfitViewer({ outfit, garments, onClose, onDelete, onSave, onOpenGarme
 
             <div className="outfit-viewer-garments">
               <p className="details-label">Garments used</p>
-              {orderedGarments.length ? (
-                <div className="outfit-viewer-garment-list" role="list">
-                  {orderedGarments.map((item) => {
-                    const type = TYPE_MAP[item.part]?.singular || "Garment";
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="outfit-viewer-garment"
-                        role="listitem"
-                        onClick={() => {
-                          void flushAndRun(() => onOpenGarment(item.id));
-                        }}
-                        aria-label={`View ${item.name || type}`}
-                      >
-                        <div className="viewer-art">
-                          <OptimizedImage
-                            src={item.thumbnail || item.image}
-                            alt=""
-                            draggable={false}
-                            sizes="120px"
-                            breakpoints={[96, 120, 160, 240]}
-                          />
+              {hasAnyGarments ? (
+                <div className={`outfit-viewer-garment-groups${garmentLooks.length > 1 ? " is-split" : ""}`}>
+                  {garmentLooks.map((look) => (
+                    <section key={look.key} className="outfit-viewer-garment-group" aria-label={look.label || "Garments"}>
+                      {look.label && <p className="outfit-viewer-model-label">{look.label}</p>}
+                      {look.garments.length ? (
+                        <div className="outfit-viewer-garment-list" role="list">
+                          {look.garments.map((item) => {
+                            const type = TYPE_MAP[item.part]?.singular || "Garment";
+                            return (
+                              <button
+                                key={`${look.key}-${item.id}`}
+                                type="button"
+                                className="outfit-viewer-garment"
+                                role="listitem"
+                                onClick={() => {
+                                  void flushAndRun(() => onOpenGarment(item.id));
+                                }}
+                                aria-label={`View ${item.name || type}`}
+                              >
+                                <div className="viewer-art">
+                                  <OptimizedImage
+                                    src={item.thumbnail || item.image}
+                                    alt=""
+                                    draggable={false}
+                                    sizes="120px"
+                                    breakpoints={[96, 120, 160, 240]}
+                                  />
+                                </div>
+                                <span className="outfit-viewer-garment-meta">
+                                  <span className="outfit-viewer-garment-type">{type}</span>
+                                  <span className="outfit-viewer-garment-name">{item.name || type}</span>
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
-                        <span className="outfit-viewer-garment-meta">
-                          <span className="outfit-viewer-garment-type">{type}</span>
-                          <span className="outfit-viewer-garment-name">{item.name || type}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
+                      ) : (
+                        <p className="outfit-viewer-missing">Garments for this model are no longer in the wardrobe.</p>
+                      )}
+                    </section>
+                  ))}
                 </div>
               ) : (
                 <p className="outfit-viewer-missing">Some garments from this outfit are no longer in the wardrobe.</p>
@@ -1333,7 +1855,20 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBackToOutfit, onNavigate, canPrev, canNext, gridColumns = 1 }) {
+function ItemViewer({
+  item,
+  models = [],
+  defaultModelId = null,
+  onClose,
+  onSave,
+  onDelete,
+  onGenerateModeled,
+  onBackToOutfit,
+  onNavigate,
+  canPrev,
+  canNext,
+  gridColumns = 1,
+}) {
   const { showApiError } = useApiError();
   const closeButtonRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -1344,6 +1879,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
   const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], owned: isOwned(item) });
   const [confirmKind, setConfirmKind] = useState(null);
   const [regenPrompt, setRegenPrompt] = useState("");
+  const [regenModelId, setRegenModelId] = useState(defaultModelId || models[0]?.id || "");
   const [zoomImage, setZoomImage] = useState(null);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
@@ -1461,13 +1997,16 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [confirmKind, gridColumns, onBackToOutfit, requestBack, requestClose, requestNavigate, sampling, zoomImage]);
 
-  const generateModeledPhoto = async (prompt = "") => {
+  const generateModeledPhoto = async (prompt = "", modelId = "") => {
     setZoomImage((current) => (current?.kind === "modeled" ? null : current));
     try {
       const response = await fetch(`/api/import/wardrobe/${item.id}/modeled`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prompt ? { prompt } : {}),
+        body: JSON.stringify({
+          ...(prompt ? { prompt } : {}),
+          ...(modelId ? { modelId } : {}),
+        }),
       });
       const value = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(value.error || "Could not generate a modeled photo.");
@@ -1511,6 +2050,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
   const openConfirm = (kind) => {
     setRegenPrompt("");
+    setRegenModelId(defaultModelId || models[0]?.id || "");
     setConfirmKind(kind);
   };
 
@@ -1521,10 +2061,11 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
 
   const confirmRegenerateAction = async () => {
     const prompt = regenPrompt.trim();
+    const modelId = regenModelId;
     const kind = confirmKind;
     closeConfirm();
     if (kind === "garment") await generateGarmentPhoto(prompt);
-    else if (kind === "modeled") await generateModeledPhoto(prompt);
+    else if (kind === "modeled") await generateModeledPhoto(prompt, modelId);
   };
 
   const handleImageLoad = (event) => {
@@ -1677,6 +2218,24 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
                   ? "A new modeled photo will replace the current one. This can take up to a minute."
                   : "This can take up to a minute. You can keep browsing while it runs."}
             </p>
+            {confirmKind === "modeled" && (
+              <label className="confirm-modal-model">
+                <span>Model</span>
+                <select
+                  value={regenModelId}
+                  disabled={!models.length}
+                  onChange={(event) => setRegenModelId(event.target.value)}
+                >
+                  {!regenModelId && <option value="">Select model</option>}
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name || "Untitled model"}
+                      {model.id === defaultModelId ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="confirm-modal-prompt">
               <span>Direction <em>optional</em></span>
               <textarea
@@ -1695,7 +2254,12 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateModeled, onBack
               <button className="secondary-button" type="button" onClick={closeConfirm}>
                 Cancel
               </button>
-              <button className="primary-button" type="button" onClick={confirmRegenerateAction}>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={confirmKind === "modeled" && !regenModelId}
+                onClick={confirmRegenerateAction}
+              >
                 {confirmKind === "garment" ? (
                   <ArrowClockwise size={15} weight="bold" aria-hidden="true" />
                 ) : (
@@ -1762,16 +2326,22 @@ export function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [composerItems, setComposerItems] = useState([]);
+  const [composerLooks, setComposerLooks] = useState([{ modelId: "", items: [] }]);
   const [composerPrompt, setComposerPrompt] = useState("");
   const [composerError, setComposerError] = useState("");
   const [suggestingOutfit, setSuggestingOutfit] = useState(false);
   const [suggestCost, setSuggestCost] = useState(null);
   const [outfits, setOutfits] = useState([]);
   const [selectedOutfitId, setSelectedOutfitId] = useState(null);
+  const [models, setModels] = useState([]);
+  const [defaultModelId, setDefaultModelId] = useState(null);
+  const [selectedModelId, setSelectedModelId] = useState(null);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [addModelBusy, setAddModelBusy] = useState(false);
   const [returnOutfitId, setReturnOutfitId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const modelGridRef = useRef(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1812,6 +2382,34 @@ export function App() {
       .catch((requestError) => {
         if (controller.signal.aborted || requestError.name === "AbortError") return;
         showApiError(requestError, { title: "Could not load outfits", fallback: "Could not load outfits." });
+      });
+    return () => controller.abort();
+  }, [showApiError]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/import/models", { cache: "no-store", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load models.");
+        return response.json();
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        const loadedModels = Array.isArray(payload?.models) ? payload.models : [];
+        const nextDefault = payload?.defaultModelId || loadedModels[0]?.id || null;
+        setModels(loadedModels);
+        setDefaultModelId(nextDefault);
+        setComposerLooks((current) => {
+          if (current[0]?.modelId) return current;
+          return [{ modelId: nextDefault || "", items: current[0]?.items || [] }];
+        });
+      })
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+        showApiError(requestError, { title: "Could not load models", fallback: "Could not load models." });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setModelsLoading(false);
       });
     return () => controller.abort();
   }, [showApiError]);
@@ -1944,6 +2542,7 @@ export function App() {
     setLibraryTab((current) => (current === "garments" ? current : "garments"));
     setReturnOutfitId(null);
     setSelectedOutfitId(null);
+    setSelectedModelId(null);
     setSelectedId(id);
   }, []);
 
@@ -1951,7 +2550,16 @@ export function App() {
     setLibraryTab((current) => (current === "outfits" ? current : "outfits"));
     setReturnOutfitId(null);
     setSelectedId(null);
+    setSelectedModelId(null);
     setSelectedOutfitId(id);
+  }, []);
+
+  const openModel = useCallback((id) => {
+    setLibraryTab((current) => (current === "models" ? current : "models"));
+    setReturnOutfitId(null);
+    setSelectedId(null);
+    setSelectedOutfitId(null);
+    setSelectedModelId(id);
   }, []);
 
   const chooseLibraryTab = useCallback((tab) => {
@@ -2014,6 +2622,15 @@ export function App() {
     return new Fuse(docs, OUTFIT_FUSE_OPTIONS);
   }, [itemsById, outfits]);
 
+  const modelFuse = useMemo(() => {
+    const docs = models.map((model) => ({
+      id: model.id,
+      name: model.name || "",
+      tags: model.id === defaultModelId ? ["default"] : [],
+    }));
+    return new Fuse(docs, { keys: ["name", "tags"], threshold: 0.35, ignoreLocation: true });
+  }, [defaultModelId, models]);
+
   const sortedGalleryItems = useMemo(() => (
     [...items].sort((a, b) => {
       const typeDifference = (TYPE_ORDER[a.part] ?? 99) - (TYPE_ORDER[b.part] ?? 99);
@@ -2065,6 +2682,17 @@ export function App() {
     [visibleOutfits],
   );
 
+  const visibleModels = useMemo(() => {
+    if (deferredSearchQuery) {
+      const rankedIds = modelFuse.search(deferredSearchQuery).map((result) => result.item.id);
+      const rank = new Map(rankedIds.map((id, index) => [id, index]));
+      return models
+        .filter((model) => rank.has(model.id))
+        .sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
+    }
+    return [...models].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  }, [deferredSearchQuery, modelFuse, models]);
+
   const totalOutfitCount = useMemo(
     () => outfits.filter((outfit) => outfit.status !== "processing").length,
     [outfits],
@@ -2080,10 +2708,22 @@ export function App() {
     return listedOutfits.length;
   }, [deferredSearchQuery, listedOutfits.length]);
 
+  const modelMatchCount = useMemo(() => {
+    if (!deferredSearchQuery) return null;
+    return visibleModels.length;
+  }, [deferredSearchQuery, visibleModels.length]);
+
   const browseableOutfitIds = useMemo(
     () => visibleOutfits.filter((outfit) => outfit.status === "ready" || outfit.status === "failed").map((outfit) => outfit.id),
     [visibleOutfits],
   );
+
+  const browseableModelIds = useMemo(
+    () => visibleModels.map((model) => model.id),
+    [visibleModels],
+  );
+
+  const selectedModel = models.find((model) => model.id === selectedModelId) || null;
 
   const navigableItemIds = useMemo(() => {
     const sourceOutfit = returnOutfitId ? outfits.find((outfit) => outfit.id === returnOutfitId) : null;
@@ -2107,6 +2747,11 @@ export function App() {
     [browseableOutfitIds, selectedOutfitId],
   );
 
+  const modelNavBounds = useMemo(
+    () => navigationBounds(browseableModelIds, selectedModelId),
+    [browseableModelIds, selectedModelId],
+  );
+
   const navigateItem = useCallback((delta) => {
     const nextId = adjacentId(navigableItemIds, selectedId, delta);
     if (nextId && nextId !== selectedId) setSelectedId(nextId);
@@ -2117,8 +2762,14 @@ export function App() {
     if (nextId && nextId !== selectedOutfitId) setSelectedOutfitId(nextId);
   }, [browseableOutfitIds, selectedOutfitId]);
 
+  const navigateModel = useCallback((delta) => {
+    const nextId = adjacentId(browseableModelIds, selectedModelId, delta);
+    if (nextId && nextId !== selectedModelId) setSelectedModelId(nextId);
+  }, [browseableModelIds, selectedModelId]);
+
   const [garmentGridColumns, setGarmentGridColumns] = useState(1);
   const [outfitGridColumns, setOutfitGridColumns] = useState(1);
+  const [modelGridColumns, setModelGridColumns] = useState(1);
   const garmentGridRef = useRef(null);
   const outfitGridRef = useRef(null);
 
@@ -2137,13 +2788,15 @@ export function App() {
     };
     observe(garmentGridRef.current, setGarmentGridColumns);
     observe(outfitGridRef.current, setOutfitGridColumns);
+    observe(modelGridRef.current, setModelGridColumns);
     return () => observers.forEach((observer) => observer.disconnect());
-  }, [libraryTab, garmentTileSize, loading, visibleItems.length, listedOutfits.length]);
+  }, [libraryTab, garmentTileSize, loading, visibleItems.length, listedOutfits.length, visibleModels.length]);
 
   const chooseType = (typeId) => {
     setActiveType(typeId);
     setSelectedId(null);
     setSelectedOutfitId(null);
+    setSelectedModelId(null);
     setReturnOutfitId(null);
   };
 
@@ -2205,7 +2858,10 @@ export function App() {
       }
     }
     setItems((current) => current.filter((item) => item.id !== id));
-    setComposerItems((current) => current.filter((item) => item.id !== id));
+    setComposerLooks((current) => current.map((look) => ({
+      ...look,
+      items: look.items.filter((item) => item.id !== id),
+    })));
     removePersistedEdit(id);
     persistDeletedItem(id);
     setSelectedId(null);
@@ -2235,20 +2891,6 @@ export function App() {
     });
   }, [outfits]);
 
-  const confirmDelete = useCallback(async () => {
-    if (!deleteConfirm || deleteBusy) return;
-    setDeleteBusy(true);
-    try {
-      if (deleteConfirm.kind === "outfit") await deleteOutfit(deleteConfirm.id);
-      else await deleteItem(deleteConfirm.id);
-      setDeleteConfirm(null);
-    } catch {
-      // Errors are surfaced via the shared API error modal inside the delete helpers.
-    } finally {
-      setDeleteBusy(false);
-    }
-  }, [deleteBusy, deleteConfirm, deleteItem, deleteOutfit]);
-
   const addImportedItem = useCallback((newItem) => {
     setItems((current) => {
       if (current.some((item) => item.id === newItem.id)) {
@@ -2275,29 +2917,57 @@ export function App() {
     setItems((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
   }, []);
 
-  const addToComposer = useCallback((id) => {
+  const addToComposer = useCallback((lookIndex, id) => {
     const item = items.find((entry) => entry.id === id);
     if (!item) return;
     let nextError = "";
-    setComposerItems((current) => {
-      if (current.some((entry) => entry.id === item.id)) {
+    setComposerLooks((current) => {
+      const next = current.map((look, index) => {
+        if (index !== lookIndex) return look;
+        if (look.items.some((entry) => entry.id === item.id)) {
+          nextError = "";
+          return look;
+        }
+        const allowsMultiple = item.part === "accessories_up";
+        if (!allowsMultiple && look.items.some((entry) => entry.part === item.part)) {
+          nextError = `Only one ${TYPE_MAP[item.part]?.singular || "item"} can be added.`;
+          return look;
+        }
         nextError = "";
-        return current;
-      }
-      const allowsMultiple = item.part === "accessories_up";
-      if (!allowsMultiple && current.some((entry) => entry.part === item.part)) {
-        nextError = `Only one ${TYPE_MAP[item.part]?.singular || "item"} can be added.`;
-        return current;
-      }
-      nextError = "";
-      return [...current, item];
+        return { ...look, items: [...look.items, item] };
+      });
+      return next;
     });
     setComposerError(nextError);
   }, [items]);
 
-  const removeFromComposer = useCallback((id) => {
+  const removeFromComposer = useCallback((lookIndex, id) => {
     setComposerError("");
-    setComposerItems((current) => current.filter((item) => item.id !== id));
+    setComposerLooks((current) => current.map((look, index) => (
+      index === lookIndex
+        ? { ...look, items: look.items.filter((item) => item.id !== id) }
+        : look
+    )));
+  }, []);
+
+  const setComposerModel = useCallback((lookIndex, modelId) => {
+    setComposerLooks((current) => current.map((look, index) => (
+      index === lookIndex ? { ...look, modelId } : look
+    )));
+  }, []);
+
+  const addSecondComposerModel = useCallback(() => {
+    setComposerLooks((current) => {
+      if (current.length > 1) return current;
+      const used = new Set(current.map((look) => look.modelId).filter(Boolean));
+      const nextModel = models.find((model) => !used.has(model.id));
+      if (!nextModel) return current;
+      return [...current, { modelId: nextModel.id, items: [] }];
+    });
+  }, [models]);
+
+  const removeSecondComposerModel = useCallback(() => {
+    setComposerLooks((current) => (current.length > 1 ? [current[0]] : current));
   }, []);
 
   const setComposerFromIds = useCallback((garmentIds) => {
@@ -2315,10 +2985,13 @@ export function App() {
       }
       next.push(item);
     }
-    setComposerItems(next);
+    setComposerLooks((current) => {
+      const primaryModelId = current[0]?.modelId || defaultModelId || models[0]?.id || "";
+      return [{ modelId: primaryModelId, items: next }];
+    });
     setComposerPrompt("");
     setComposerError("");
-  }, [items]);
+  }, [defaultModelId, items, models]);
 
   const suggestOutfit = useCallback(async (prompt, onSuccess) => {
     const trimmed = String(prompt || "").trim();
@@ -2346,35 +3019,164 @@ export function App() {
   }, [setComposerFromIds, showApiError, suggestingOutfit]);
 
   const generateOutfit = useCallback(async () => {
-    if (composerItems.length < 2) return;
-    const snapshotItems = composerItems;
-    const garmentIds = snapshotItems.map((item) => item.id);
+    if (!composerLooks.length || composerLooks.some((look) => (look.items || []).length < 2 || !look.modelId)) return;
+    const snapshotLooks = composerLooks.map((look) => ({
+      modelId: look.modelId,
+      items: [...look.items],
+    }));
+    const looks = snapshotLooks.map((look) => ({
+      modelId: look.modelId,
+      garmentIds: look.items.map((item) => item.id),
+    }));
     const prompt = composerPrompt.trim();
     setComposerError("");
-    setComposerItems([]);
+    setComposerLooks((current) => current.map((look) => ({ ...look, items: [] })));
     setComposerPrompt("");
     try {
       const response = await fetch("/api/import/outfits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ garmentIds, prompt }),
+        body: JSON.stringify({ looks, prompt }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "Could not generate the outfit.");
       setOutfits((current) => [result, ...current.filter((outfit) => outfit.id !== result.id)]);
     } catch (requestError) {
-      setComposerItems(snapshotItems);
+      setComposerLooks(snapshotLooks);
       setComposerPrompt(prompt);
       showApiError(requestError, { title: "Could not generate outfit", fallback: "Could not generate the outfit." });
     }
-  }, [composerItems, composerPrompt, showApiError]);
+  }, [composerLooks, composerPrompt, showApiError]);
+
+  const saveModel = useCallback(async (id, patch) => {
+    const response = await fetch(`/api/import/models/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Could not save the model.");
+    if (result.defaultModelId) setDefaultModelId(result.defaultModelId);
+    if (result.model) {
+      setModels((current) => current.map((model) => (model.id === id ? result.model : model)));
+    }
+    return result;
+  }, []);
+
+  const setDefaultModel = useCallback(async (id) => {
+    await saveModel(id, { setDefault: true });
+  }, [saveModel]);
+
+  const addModel = useCallback(async (file) => {
+    if (!file || addModelBusy) return;
+    setAddModelBusy(true);
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      const response = await fetch("/api/import/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl,
+          name: file.name.replace(/\.[^.]+$/, "").slice(0, 120) || "New model",
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not add the model.");
+      if (result.defaultModelId) setDefaultModelId(result.defaultModelId);
+      if (result.model) {
+        setModels((current) => [...current, result.model]);
+        setComposerLooks((current) => {
+          if (current[0]?.modelId) return current;
+          return [{ modelId: result.model.id, items: current[0]?.items || [] }];
+        });
+        openModel(result.model.id);
+      }
+    } catch (requestError) {
+      showApiError(requestError, { title: "Could not add model", fallback: "Could not add the model." });
+    } finally {
+      setAddModelBusy(false);
+    }
+  }, [addModelBusy, openModel, showApiError]);
+
+  const deleteModel = useCallback(async (id) => {
+    try {
+      const response = await fetch(`/api/import/models/${id}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not delete the model.");
+      setModels((current) => current.filter((model) => model.id !== id));
+      if (result.defaultModelId) setDefaultModelId(result.defaultModelId);
+      setSelectedModelId(null);
+      setComposerLooks((current) => current.map((look) => (
+        look.modelId === id
+          ? { ...look, modelId: result.defaultModelId || "" }
+          : look
+      )).filter((look, index, looks) => {
+        if (index === 0) return true;
+        return look.modelId && look.modelId !== looks[0].modelId;
+      }));
+    } catch (requestError) {
+      showApiError(requestError, { title: "Could not delete model", fallback: "Could not delete the model." });
+      throw requestError;
+    }
+  }, [showApiError]);
+
+  const requestDeleteModel = useCallback((id) => {
+    const model = models.find((entry) => entry.id === id);
+    if (models.length <= 1) {
+      showApiError("Keep at least one model in the library.", { title: "Could not delete model" });
+      return;
+    }
+    setDeleteConfirm({
+      kind: "model",
+      id,
+      eyebrow: "Model",
+      title: `Delete ${model?.name || "this model"}?`,
+      detail: "The reference photo will be removed. Outfits already generated stay in your library.",
+      confirmLabel: "Delete",
+    });
+  }, [models, showApiError]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteConfirm || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      if (deleteConfirm.kind === "outfit") await deleteOutfit(deleteConfirm.id);
+      else if (deleteConfirm.kind === "model") await deleteModel(deleteConfirm.id);
+      else await deleteItem(deleteConfirm.id);
+      setDeleteConfirm(null);
+    } catch {
+      // Errors are surfaced via the shared API error modal inside the delete helpers.
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteBusy, deleteConfirm, deleteItem, deleteModel, deleteOutfit]);
+
+  const searchPlaceholder = libraryTab === "outfits"
+    ? "Search name or details"
+    : libraryTab === "models"
+      ? "Search models"
+      : "Search name or details";
+  const searchLabel = libraryTab === "outfits"
+    ? "Search outfits"
+    : libraryTab === "models"
+      ? "Search models"
+      : "Search garments";
+  const pieceCountLabel = libraryTab === "outfits"
+    ? `${totalOutfitCount} ${totalOutfitCount === 1 ? "look" : "looks"}`
+    : libraryTab === "models"
+      ? `${models.length} ${models.length === 1 ? "model" : "models"}`
+      : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`;
 
   return (
-    <div className={`app-shell${selectedItem || selectedOutfit ? " has-selection" : ""}`}>
+    <div className={`app-shell${selectedItem || selectedOutfit || selectedModel ? " has-selection" : ""}`}>
       <main className="gallery-pane">
         <div className="gallery-toolbar">
           <OutfitComposer
-            items={composerItems}
+            models={models}
+            looks={composerLooks}
+            onModelChange={setComposerModel}
+            onAddSecondModel={addSecondComposerModel}
+            onRemoveSecondModel={removeSecondComposerModel}
             prompt={composerPrompt}
             onPromptChange={setComposerPrompt}
             error={composerError}
@@ -2394,8 +3196,8 @@ export function App() {
             <GallerySearch
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder={libraryTab === "outfits" ? "Search name or details" : "Search name or details"}
-              label={libraryTab === "outfits" ? "Search outfits" : "Search garments"}
+              placeholder={searchPlaceholder}
+              label={searchLabel}
             />
           </div>
         </div>
@@ -2439,19 +3241,33 @@ export function App() {
                   </span>
                 )}
               </button>
+              <button
+                type="button"
+                className={libraryTab === "models" ? "active" : ""}
+                onClick={() => chooseLibraryTab("models")}
+                aria-pressed={libraryTab === "models"}
+                aria-label={
+                  modelMatchCount == null
+                    ? "Models"
+                    : `Models, ${modelMatchCount} ${modelMatchCount === 1 ? "match" : "matches"}`
+                }
+              >
+                Models
+                {modelMatchCount != null && (
+                  <span className="library-tab-badge" aria-hidden="true">
+                    {modelMatchCount > 99 ? "99+" : modelMatchCount}
+                  </span>
+                )}
+              </button>
             </nav>
-            {loading && libraryTab === "garments" ? (
+            {(loading && libraryTab === "garments") || (modelsLoading && libraryTab === "models") ? (
               <span className="piece-count-skeleton" aria-hidden="true" />
             ) : (
               <div className="gallery-meta-actions">
                 {libraryTab === "garments" && (
                   <GarmentTileSizeToggle value={garmentTileSize} onChange={chooseGarmentTileSize} />
                 )}
-                <p className="piece-count">
-                  {libraryTab === "outfits"
-                    ? `${totalOutfitCount} ${totalOutfitCount === 1 ? "look" : "looks"}`
-                    : `${items.length} ${items.length === 1 ? "piece" : "pieces"}`}
-                </p>
+                <p className="piece-count">{pieceCountLabel}</p>
               </div>
             )}
           </div>
@@ -2512,12 +3328,27 @@ export function App() {
             gridRef={outfitGridRef}
           />
         </div>
+
+        <div className="library-panel" hidden={libraryTab !== "models"}>
+          <ModelsPanel
+            models={visibleModels}
+            selectedId={selectedModelId}
+            defaultModelId={defaultModelId}
+            searching={Boolean(deferredSearchQuery)}
+            onOpen={openModel}
+            onAdd={addModel}
+            addBusy={addModelBusy}
+            gridRef={modelGridRef}
+          />
+        </div>
       </main>
 
       {selectedItem && (
         <ItemViewer
           key={selectedItem.id}
           item={selectedItem}
+          models={models}
+          defaultModelId={defaultModelId}
           onClose={closeItemViewer}
           onSave={saveItem}
           onDelete={requestDeleteItem}
@@ -2534,6 +3365,7 @@ export function App() {
           key={selectedOutfit.id}
           outfit={selectedOutfit}
           garments={selectedOutfitGarments}
+          models={models}
           onClose={() => setSelectedOutfitId(null)}
           onDelete={requestDeleteOutfit}
           onSave={saveOutfit}
@@ -2542,6 +3374,22 @@ export function App() {
           canPrev={outfitNavBounds.canPrev}
           canNext={outfitNavBounds.canNext}
           gridColumns={outfitGridColumns}
+        />
+      )}
+      {selectedModel && (
+        <ModelViewer
+          key={selectedModel.id}
+          model={selectedModel}
+          isDefault={selectedModel.id === defaultModelId}
+          canDelete={models.length > 1}
+          onClose={() => setSelectedModelId(null)}
+          onSave={saveModel}
+          onSetDefault={setDefaultModel}
+          onDelete={requestDeleteModel}
+          onNavigate={navigateModel}
+          canPrev={modelNavBounds.canPrev}
+          canNext={modelNavBounds.canNext}
+          gridColumns={modelGridColumns}
         />
       )}
       <WardrobeImportFlow
@@ -2564,7 +3412,7 @@ export function App() {
           detail={deleteConfirm.detail}
           confirmLabel={deleteConfirm.confirmLabel}
           busy={deleteBusy}
-          elevated={deleteConfirm.kind === "outfit" && !selectedOutfit}
+          elevated={(deleteConfirm.kind === "outfit" && !selectedOutfit) || (deleteConfirm.kind === "model" && !selectedModel)}
           onCancel={() => {
             if (!deleteBusy) setDeleteConfirm(null);
           }}

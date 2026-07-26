@@ -89,7 +89,7 @@ function isProcessingJob(job) {
   );
 }
 
-function defaultDraft(job) {
+function defaultDraft(job, defaultModelId = "") {
   const metadata = job.metadata || {};
   return {
     name: metadata.name || "New piece",
@@ -98,10 +98,22 @@ function defaultDraft(job) {
     secondaryColor: metadata.secondaryColor || "",
     tags: Array.isArray(metadata.tags) ? metadata.tags.join(", ") : (metadata.tags || ""),
     owned: metadata.owned !== false,
+    modelId: job.stages?.modeled?.modelId || defaultModelId || "",
   };
 }
 
-function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt, busy, onAction }) {
+function ReviewEditor({
+  job,
+  stage,
+  draft,
+  setDraft,
+  regenPrompt,
+  setRegenPrompt,
+  busy,
+  onAction,
+  models = [],
+  defaultModelId = null,
+}) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
   const asset = job.stages[stage]?.assetUrl;
@@ -111,6 +123,26 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
   const previewAlt = isCrop ? "Detected item crop" : isGarment ? "Extracted garment" : "Generated modeled look";
   const primaryValid = HEX_COLOR.test(draft.color);
   const secondaryValid = !draft.secondaryColor || HEX_COLOR.test(draft.secondaryColor);
+  const selectedModelId = draft.modelId || defaultModelId || models[0]?.id || "";
+  const modelSelect = (isGarment || isModeled) ? (
+    <div className="import-field">
+      <label htmlFor={`model-${job.id}-${stage}`}>Model</label>
+      <select
+        id={`model-${job.id}-${stage}`}
+        value={selectedModelId}
+        disabled={busy || !models.length}
+        onChange={(event) => setDraft({ ...draft, modelId: event.target.value })}
+      >
+        {!selectedModelId && <option value="">Select model</option>}
+        {models.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.name || "Untitled model"}
+            {model.id === defaultModelId ? " (default)" : ""}
+          </option>
+        ))}
+      </select>
+    </div>
+  ) : null;
   return (
     <div className="import-editor">
       {(isGarment || isModeled) && asset ? (
@@ -148,16 +180,22 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
             <div className="import-field"><label htmlFor={`primary-${job.id}`}>Primary color</label><div className="import-color-row"><input id={`primary-${job.id}`} type="color" value={primaryValid ? draft.color : "#000000"} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /><input aria-label="Primary color hex" aria-invalid={!primaryValid} value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></div>{!primaryValid && <small className="import-field-error">Use a six-digit hex color, such as #d8d0c2.</small>}</div>
             <div className="import-field"><label htmlFor={`secondary-${job.id}`}>Secondary color <span>optional</span></label><input id={`secondary-${job.id}`} type="text" aria-invalid={!secondaryValid} placeholder="#hex or leave blank" value={draft.secondaryColor} onChange={(event) => setDraft({ ...draft, secondaryColor: event.target.value })} />{!secondaryValid && <small className="import-field-error">Use a six-digit hex color or leave this empty.</small>}</div>
             <div className="import-field"><label htmlFor={`tags-${job.id}`}>Details</label><input id={`tags-${job.id}`} value={draft.tags} placeholder="navy, casual, polo, collared, relaxed-fit" onChange={(event) => setDraft({ ...draft, tags: event.target.value })} /></div>
+            {modelSelect}
           </>
-        ) : <p className="import-card__detail">Approve this editorial image to attach it to the new wardrobe piece, or regenerate it with a more specific direction.</p>}
+        ) : (
+          <>
+            <p className="import-card__detail">Approve this editorial image to attach it to the new wardrobe piece, or regenerate it with a more specific direction.</p>
+            {modelSelect}
+          </>
+        )}
         {!isCrop && <div className="import-field import-regenerate-field">
           <label htmlFor={`regenerate-${job.id}-${stage}`}>Regeneration direction <span>optional</span></label>
           <textarea id={`regenerate-${job.id}-${stage}`} rows="3" value={regenPrompt} onChange={(event) => setRegenPrompt(event.target.value)} placeholder={isGarment ? "Example: preserve the original zipper and remove the retail tag" : "Example: use a quiet evening street and show the full garment"} />
         </div>}
         <div className="import-actions">
           <button className="import-button" disabled={busy} onClick={() => onAction("reject")}><Trash size={14} /> Reject</button>
-          {!isCrop && <button className="import-button" disabled={busy} onClick={() => onAction("regenerate", regenPrompt)}><ArrowCounterClockwise size={14} /> Regenerate</button>}
-          <button className="import-button import-button--primary" disabled={busy || (isGarment && (!draft.name.trim() || !primaryValid || !secondaryValid))} onClick={() => onAction("approve")}><Check size={14} weight="bold" /> {isCrop ? "Use crop" : "Approve"}</button>
+          {!isCrop && <button className="import-button" disabled={busy || ((isGarment || isModeled) && !selectedModelId)} onClick={() => onAction("regenerate", regenPrompt, selectedModelId)}><ArrowCounterClockwise size={14} /> Regenerate</button>}
+          <button className="import-button import-button--primary" disabled={busy || (isGarment && (!draft.name.trim() || !primaryValid || !secondaryValid || !selectedModelId))} onClick={() => onAction("approve", "", selectedModelId)}><Check size={14} weight="bold" /> {isCrop ? "Use crop" : "Approve"}</button>
         </div>
       </div>
       {lightboxOpen && asset && (
@@ -253,6 +291,8 @@ export function WardrobeImportFlow({
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
   const [setup, setSetup] = useState(null);
+  const [models, setModels] = useState([]);
+  const [defaultModelId, setDefaultModelId] = useState(null);
   const [completionItems, setCompletionItems] = useState([]);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [pendingUploads, setPendingUploads] = useState([]);
@@ -282,12 +322,34 @@ export function WardrobeImportFlow({
         setSetup({ ready: false, error: requestError.message });
         showApiError(requestError, { title: "Could not load import setup", fallback: "Could not load import setup." });
       });
+    api("/api/import/models", { signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        const loadedModels = Array.isArray(payload?.models) ? payload.models : [];
+        const nextDefault = payload?.defaultModelId || loadedModels[0]?.id || null;
+        setModels(loadedModels);
+        setDefaultModelId(nextDefault);
+        setDrafts((current) => Object.fromEntries(Object.entries(current).map(([id, draft]) => [
+          id,
+          { ...draft, modelId: draft.modelId || nextDefault || "" },
+        ])));
+      })
+      .catch((requestError) => {
+        if (controller.signal.aborted || requestError.name === "AbortError") return;
+        showApiError(requestError, { title: "Could not load models", fallback: "Could not load models." });
+      });
     api(API, { signal: controller.signal })
       .then((storedJobs) => {
         if (controller.signal.aborted) return;
         const visibleJobs = storedJobs.filter((job) => job.status !== "complete" && job.stages?.crop?.status !== "rejected" && job.stages?.garment?.status !== "rejected" && job.stages?.modeled?.status !== "rejected");
         setJobs(visibleJobs);
-        setDrafts(Object.fromEntries(visibleJobs.map((job) => [job.id, defaultDraft(job)])));
+        setDrafts((current) => {
+          const nextDefault = Object.values(current)[0]?.modelId || "";
+          return Object.fromEntries(visibleJobs.map((job) => [
+            job.id,
+            current[job.id] || defaultDraft(job, nextDefault),
+          ]));
+        });
       })
       .catch((requestError) => {
         if (controller.signal.aborted || requestError.name === "AbortError") return;
@@ -301,12 +363,12 @@ export function WardrobeImportFlow({
       const next = await api(`${API}/${id}`, signal ? { signal } : undefined);
       if (signal?.aborted || !mountedRef.current) return;
       setJobs((current) => current.map((job) => job.id === id ? next : job));
-      setDrafts((current) => current[id] ? current : { ...current, [id]: defaultDraft(next) });
+      setDrafts((current) => current[id] ? current : { ...current, [id]: defaultDraft(next, defaultModelId || "") });
     } catch (requestError) {
       // Polling refresh failures are ignored to avoid modal spam; user actions surface errors themselves.
       if (signal?.aborted || requestError.name === "AbortError" || !mountedRef.current) return;
     }
-  }, []);
+  }, [defaultModelId]);
 
   const processingJobIds = jobs
     .filter(isProcessingJob)
@@ -469,7 +531,10 @@ export function WardrobeImportFlow({
           continue;
         }
         setJobs((current) => [...current, ...createdJobs]);
-        setDrafts((current) => ({ ...current, ...Object.fromEntries(createdJobs.map((job) => [job.id, defaultDraft(job)])) }));
+        setDrafts((current) => ({
+          ...current,
+          ...Object.fromEntries(createdJobs.map((job) => [job.id, defaultDraft(job, defaultModelId || "")])),
+        }));
       } catch (requestError) {
         if (mountedRef.current) {
           showApiError(requestError, { title: "Import failed", fallback: "Could not start the import." });
@@ -481,7 +546,7 @@ export function WardrobeImportFlow({
         URL.revokeObjectURL(previewUrl);
       }
     }
-  }, [setup, showApiError]);
+  }, [defaultModelId, setup, showApiError]);
 
   useEffect(() => {
     let depth = 0;
@@ -494,9 +559,10 @@ export function WardrobeImportFlow({
     return () => { window.removeEventListener("dragenter", onDragEnter); window.removeEventListener("dragover", onDragOver); window.removeEventListener("dragleave", onDragLeave); window.removeEventListener("drop", onDrop); window.removeEventListener("paste", onPaste); };
   }, [submitFiles]);
 
-  const perform = async (job, stage, action, prompt = "") => {
+  const perform = async (job, stage, action, prompt = "", modelId = "") => {
     setBusyId(job.id);
     try {
+      const resolvedModelId = modelId || drafts[job.id]?.modelId || defaultModelId || "";
       if (stage === "garment" && action === "approve") {
         const draft = drafts[job.id];
         const metadata = {
@@ -508,7 +574,10 @@ export function WardrobeImportFlow({
           owned: draft.owned !== false,
         };
         await api(`${API}/${job.id}/metadata`, { method: "PATCH", body: JSON.stringify({ metadata }) });
-        const updated = await api(`${API}/${job.id}/stages/garment/approve`, { method: "POST" });
+        const updated = await api(`${API}/${job.id}/stages/garment/approve`, {
+          method: "POST",
+          body: JSON.stringify({ modelId: resolvedModelId }),
+        });
         const wardrobeId = `import-${job.id}`;
         const garmentPath = `/api/import/library/${wardrobeId}-garment.png`;
         const costs = await wardrobeCostsFor(wardrobeId, updated);
@@ -524,7 +593,13 @@ export function WardrobeImportFlow({
         });
         setJobs((current) => current.map((item) => item.id === job.id ? updated : item));
       } else {
-        const updated = await api(`${API}/${job.id}/stages/${stage}/${action}`, { method: "POST", body: action === "regenerate" ? JSON.stringify({ prompt }) : undefined });
+        const bodyPayload = action === "regenerate"
+          ? JSON.stringify({
+              prompt,
+              ...(stage === "modeled" && resolvedModelId ? { modelId: resolvedModelId } : {}),
+            })
+          : undefined;
+        const updated = await api(`${API}/${job.id}/stages/${stage}/${action}`, { method: "POST", body: bodyPayload });
         const removeFromQueue = action === "reject" || (stage === "modeled" && action === "approve");
         setJobs((current) => removeFromQueue ? current.filter((item) => item.id !== job.id) : current.map((item) => item.id === job.id ? updated : item));
         if (removeFromQueue) {
@@ -937,7 +1012,13 @@ export function WardrobeImportFlow({
               <div className="import-drop-target import-setup-warning">
                 <WarningCircle size={30} />
                 <h2>Setup required</h2>
-                <p>Add your OpenAI API key to <code>.env</code> and a PNG reference photo of yourself at <code>{setup.modelReference || "data/model-reference.png"}</code>, then restart the app.</p>
+                <p>
+                  {setup?.hasApiKey === false && !(setup?.hasDefaultModel ?? setup?.hasModelReference)
+                    ? "Add your OpenAI API key to .env and a default model in the Models tab, then restart the app if you changed .env."
+                    : setup?.hasApiKey === false
+                      ? "Add your OpenAI API key to .env, then restart the app."
+                      : "Add a default model in the Models tab (upload a PNG reference photo of yourself)."}
+                </p>
               </div>
             ) : hasCompletionBadge ? (
               completionPanel
@@ -976,12 +1057,14 @@ export function WardrobeImportFlow({
                       key={`${reviewJob.id}:${reviewStage}`}
                       job={reviewJob}
                       stage={reviewStage}
-                      draft={drafts[reviewJob.id] || defaultDraft(reviewJob)}
+                      draft={drafts[reviewJob.id] || defaultDraft(reviewJob, defaultModelId || "")}
                       setDraft={(draft) => setDrafts((current) => ({ ...current, [reviewJob.id]: draft }))}
                       regenPrompt={regenerationPrompts[`${reviewJob.id}:${reviewStage}`] || ""}
                       setRegenPrompt={(prompt) => setRegenerationPrompts((current) => ({ ...current, [`${reviewJob.id}:${reviewStage}`]: prompt }))}
                       busy={busyId === reviewJob.id}
-                      onAction={(action, prompt) => perform(reviewJob, reviewStage, action, prompt)}
+                      models={models}
+                      defaultModelId={defaultModelId}
+                      onAction={(action, prompt, modelId) => perform(reviewJob, reviewStage, action, prompt, modelId)}
                     />
                   ) : reviewJob && hasCleanupFailure(reviewJob) ? (
                     <CleanupEditor

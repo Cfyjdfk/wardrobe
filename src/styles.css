@@ -85,14 +85,13 @@ button { font: inherit; }
   max-width: none;
   margin: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 16px;
-  min-height: 58px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  min-height: 0;
   border: 1.5px dashed color-mix(in srgb, var(--line) 72%, var(--muted));
   border-radius: 20px;
-  padding: 10px 16px 10px 12px;
+  padding: 12px 14px;
   overflow: hidden;
   color: var(--ink);
   background: color-mix(in srgb, var(--paper) 70%, transparent);
@@ -107,9 +106,6 @@ button { font: inherit; }
 }
 
 .outfit-composer.has-items {
-  flex-direction: column;
-  align-items: stretch;
-  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 28px;
   padding: 16px 20px;
@@ -177,25 +173,302 @@ button { font: inherit; }
 }
 
 .outfit-composer-main {
-  flex: 1 1 220px;
+  flex: 1 1 100%;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 10px 14px;
-  padding-left: 2px;
+  padding-left: 0;
 }
 
 .outfit-composer.has-items .outfit-composer-main {
   flex: 1 1 auto;
   align-items: stretch;
-  padding-left: 2px;
+}
+
+.outfit-composer-models {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.outfit-composer-models.is-duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.outfit-composer-models.is-duo .outfit-composer-model-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.outfit-composer-model-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 168px;
+}
+
+.outfit-composer-model-label {
+  font-size: 10px;
+  font-weight: 520;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.outfit-composer-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.outfit-composer-model-avatar {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 78%, #fff);
+  box-shadow: 0 1px 4px rgba(25, 23, 18, .08);
+}
+
+.outfit-composer-model-avatar.is-empty {
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--muted) 28%, var(--paper)) 0 38%, transparent 39%),
+    color-mix(in srgb, var(--line) 45%, var(--paper));
+}
+
+.outfit-composer-model-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.outfit-composer-model-control {
+  position: relative;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.outfit-composer-model-control select {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 28px 6px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(50% - 2px), calc(100% - 9px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.outfit-composer-model-control select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.outfit-composer-model-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0;
+  background: color-mix(in srgb, var(--paper) 94%, #fff);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(25, 23, 18, .1);
+}
+
+.outfit-composer-model-remove:hover,
+.outfit-composer-model-remove:focus-visible {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  outline: none;
+}
+
+.outfit-composer-model-remove:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.outfit-composer-add-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.outfit-composer-add-model:hover,
+.outfit-composer-add-model:focus-visible {
+  border-color: var(--ink);
+  color: var(--ink);
+  outline: none;
+}
+
+.outfit-composer-add-model:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.outfit-composer-main:not(.is-duo) .outfit-composer-look {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+.outfit-composer-main.is-duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
+.outfit-composer-main.is-duo .outfit-composer-look {
+  width: 100%;
+  min-width: 0;
+}
+
+.outfit-composer-look {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 88px;
+  border: 1.5px dashed color-mix(in srgb, var(--line) 80%, var(--muted));
+  border-radius: 16px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.outfit-composer.has-items .outfit-composer-look {
+  min-height: 148px;
+  border-style: solid;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--paper) 78%, #fff);
+}
+
+.outfit-composer-look.is-over {
+  border-style: solid;
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 88%, #fff);
+}
+
+.outfit-composer-look-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 520;
+  letter-spacing: .04em;
+  color: var(--muted);
 }
 
 .outfit-composer-tray {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
   min-width: 0;
+  width: 100%;
   max-width: 100%;
+}
+
+.models-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 30px 40px 0;
+}
+
+.models-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  padding: 7px 14px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.models-add-button:hover,
+.models-add-button:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.models-add-button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.model-default-badge {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--paper) 88%, #fff);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.model-default-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.model-viewer-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
 }
 
 .outfit-composer-prompt {
@@ -245,13 +518,16 @@ button { font: inherit; }
 
 .outfit-composer-empty {
   margin: 0;
+  width: 100%;
   min-width: 0;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--muted);
   font-size: 13px;
   letter-spacing: .02em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: center;
 }
 
 .outfit-composer-items {
@@ -754,6 +1030,90 @@ button { font: inherit; }
   padding: 36px 40px 80px;
 }
 
+.models-section.outfits-section {
+  padding-top: 18px;
+}
+
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  align-items: start;
+  justify-items: center;
+  gap: 22px 18px;
+}
+
+.model-avatar-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 160px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.model-avatar {
+  position: relative;
+  width: min(140px, 100%);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: color-mix(in srgb, var(--paper) 70%, #fff);
+  box-shadow: 0 4px 16px rgba(25, 23, 18, .08);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.model-avatar-card:hover .model-avatar,
+.model-avatar-card:focus-visible .model-avatar {
+  border-color: color-mix(in srgb, var(--ink) 40%, var(--line));
+  box-shadow: 0 8px 22px rgba(25, 23, 18, .12);
+  outline: none;
+}
+
+.model-avatar-card.selected .model-avatar {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+.model-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+.model-avatar-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--line) 55%, var(--paper));
+}
+
+.model-avatar .model-default-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  top: auto;
+  white-space: nowrap;
+}
+
+.model-avatar-name {
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  text-align: center;
+}
+
 .outfits-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -860,6 +1220,31 @@ button { font: inherit; }
   height: 96px;
 }
 
+.viewer.has-outfit-image .model-viewer-hero {
+  display: grid;
+  place-items: center;
+  aspect-ratio: auto;
+  min-height: 280px;
+  background: transparent;
+  overflow: visible;
+}
+
+.viewer.has-outfit-image .model-viewer-hero::after {
+  display: none;
+}
+
+.viewer.has-outfit-image .model-viewer-hero .model-viewer-hero-photo {
+  position: relative;
+  inset: auto;
+  width: min(280px, 72%);
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center;
+  box-shadow: 0 10px 28px rgba(25, 23, 18, .14);
+}
+
 .viewer-back-button {
   position: absolute;
   top: 18px;
@@ -906,6 +1291,24 @@ button { font: inherit; }
 
 .outfit-viewer-garments .details-label {
   margin-bottom: 14px;
+}
+
+.outfit-viewer-garment-groups.is-split {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.outfit-viewer-garment-group + .outfit-viewer-garment-group {
+  padding-top: 4px;
+}
+
+.outfit-viewer-model-label {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 520;
+  letter-spacing: .02em;
 }
 
 .outfit-viewer-garment-list {
@@ -2012,6 +2415,45 @@ button.modeled-hero-zoom {
   width: min(460px, 100%);
 }
 
+.confirm-modal-model {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.confirm-modal-model span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 520;
+  letter-spacing: .04em;
+}
+
+.confirm-modal-model select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 9px 34px 9px 12px;
+  background: color-mix(in srgb, var(--paper) 88%, #fff);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%),
+    linear-gradient(color-mix(in srgb, var(--paper) 88%, #fff), color-mix(in srgb, var(--paper) 88%, #fff));
+  background-position: calc(100% - 16px) calc(50% - 2px), calc(100% - 11px) calc(50% - 2px), 0 0;
+  background-size: 5px 5px, 5px 5px, auto;
+  background-repeat: no-repeat;
+}
+
+.confirm-modal-model select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .confirm-modal-prompt {
   display: grid;
   gap: 8px;
@@ -2531,6 +2973,20 @@ button.modeled-hero-zoom {
   .gallery-toolbar { padding: 12px 24px 24px; gap: 8px; }
   .outfit-composer-empty { font-size: 11px; }
   .outfit-composer-chip { width: 112px; height: 140px; }
+  .outfit-composer-main.is-duo {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .outfit-composer-look {
+    min-height: 72px;
+    padding: 8px 10px;
+  }
+
+  .outfit-composer.has-items .outfit-composer-look {
+    min-height: 120px;
+  }
+  .models-toolbar { padding: 30px 20px 0; }
   .gallery-header { padding: 32px 24px 0; }
   .category-nav { width: 100%; margin: 38px 0 0; }
   .category-nav button { min-height: 38px; padding: 9px 15px; font-size: 11px; }
